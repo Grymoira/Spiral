@@ -1,21 +1,56 @@
-# Prototype protocol — NOT Sync Protocol v1
+# Spiral experimental synchronized-room protocol
 
-This document describes only the current loopback HTTP membership experiment. It does **not** define the future WSS synchronization wire protocol.
+**Status: development prototype, not a frozen Sync Protocol v1.** Control data travels over a direct client-to-server WebSocket. The server is authoritative for the shared playback timeline; audio files never pass through the room server. Devices on different networks connect to the same reachable HTTPS/WSS endpoint. Spiral does not currently establish peer-to-peer NAT-traversing sockets between devices.
 
-All endpoints are local-development-only. JSON requests must be a **single top-level object** no larger than 4096 bytes. Use `Content-Type: application/json` (the optional `charset=UTF-8` parameter is accepted). The prototype rejects JSON `null`, arrays, duplicate top-level keys, unknown properties, malformed JSON, and trailing values. Join requests must include a nonempty string `inviteCode`. Invalid JSON requests produce HTTP 400, wrong invitations produce 403, and unsupported methods on known resources produce 405 with an `Allow` header. Replies are JSON with `Cache-Control: no-store` except successful leave (204).
+## Transport and access
 
-| Method | Path | Input | Outcome |
+- Same listener serves HTTP(S) room membership and `GET /v1/ws` (WebSocket upgrade).
+- Plain HTTP/WS are limited to loopback, including the actual bound address. All non-loopback binds require `-tls-cert` **and** `-tls-key`; use a trusted TLS certificate and `https://` / `wss://` in clients. TLS certificate verification is never disabled by default.
+- New WebSockets must send `{ "type":"auth", "roomId":"...", "sessionToken":"..." }` as their **first text frame**. Session tokens are never included in URLs, room snapshots, media metadata, or logs. Session expiry and revocation are checked for each command.
+- Native clients need not set `Origin`; present browser origins must match the target origin. WebSocket messages are bounded to 4096 bytes, must be masked UTF-8 text, and do not use extension/compression or fragmented frames. Invalid/oversized messages terminate the connection. A basic per-connection rate limit applies.
+- A member's newer authenticated WebSocket replaces the prior one. Disconnect clears that member's readiness; reconnect requires fresh time sampling and readiness confirmation. There is no durable resume across server restarts.
+
+## HTTP room membership
+
+Requests must be JSON objects with *exactly cased* allowed property names, at most 4096 bytes, unique fields, and no trailing JSON. Replies use `Cache-Control: no-store`.
+
+| Method | Path | JSON/credentials | Result |
 |---|---|---|---|
 | GET | `/healthz` | none | `{ "status": "ok" }` |
-| POST | `/v1/rooms` | `{}` | 201: credentials for new host, including `inviteCode` |
-| POST | `/v1/rooms/{roomId}/join` | `{ "inviteCode": "..." }` | 201: member credentials |
-| GET | `/v1/rooms/{roomId}` | `Authorization: Bearer <sessionToken>` | snapshot of members and membership revision |
-| DELETE | `/v1/rooms/{roomId}/members/me` | `Authorization: Bearer <sessionToken>` | 204; host leave destroys the room |
+| POST | `/v1/rooms` | `{}` | Host credentials and invitation |
+| POST | `/v1/rooms/{id}/join` | `{ "inviteCode":"..." }` | Member credentials |
+| GET | `/v1/rooms/{id}` | `Authorization: Bearer <token>` | Current authoritative snapshot |
+| DELETE | `/v1/rooms/{id}/members/me` | Bearer token | Exit; host exit destroys room |
 
-The server generates cryptographically random identifiers, invitation codes, and 24-hour ephemeral session tokens. The room holds at most **five** members including the host, guarded by a mutex. State is in memory only and is discarded on server restart. Session expiration is enforced lazily on access and old rooms are reaped during creation. At most 1024 rooms may exist concurrently. The API rejects non-loopback requested addresses and checks the **actual bound TCP address** before accepting requests, so a hostname must resolve to loopback. The room snapshot never contains invitation codes or session tokens.
+A room has at most five active members. Session tokens expire after 24 hours and are stored only in server memory. State is ephemeral and erased on restart.
 
-This prototype has **no playback state, clock synchronization, readiness, scheduling, member reconnection identity, session renewal, durable audit trail, or network rate limiting**. Repeated joins create separate members until the capacity is reached. None of these limitations may be presented as completed features.
+## Real-time messages (JSON)
 
-## Future protocol design requirements
+Client to server:
 
-Before cross-network release, define versioned WSS messages, explicit session identity and resume credentials, roomEpoch/clockEpoch/stateRevision, trackGeneration, track identity, clock sampling, prepare/arm/commit/cancel rules, drift correction, time unit/range handling, and tested authorization boundaries. Never serialize media credentials, local file paths, or signed media URLs into room control state.
+```json
+{"type":"auth","roomId":"ROOM_ID","sessionToken":"SECRET"}
+{"type":"clock_probe","probeId":"1","c0":12345}
+{"type":"track","sha256":"64 lowercase hex digits","durationMs":60000}
+{"type":"ready","trackId":"64 lowercase hex digits","trackGeneration":1,"ready":true}
+{"type":"schedule","action":"play","mediaMs":0}
+{"type":"schedule","action":"pause","mediaMs":0}
+{"type":"schedule","action":"seek","mediaMs":15000}
+```
+
+`track` and `schedule` require host permissions. `ready` requires the exact current track hash and generation. `play` (including playing-state seek) is rejected until *every active member* reports ready. Readiness is advisory client state, not cryptographic proof of actual audio output. All file paths and media credentials stay on clients.
+
+Server to client:
+
+- `auth_ok` — authenticated member ID, role, clock epoch.
+- `snapshot` — complete room membership and timeline state, including `roomEpoch`, `clockEpoch`, `stateRevision`, server monotonic time, SHA-256 track identity, `trackGeneration`, audio duration, playing/paused state, media/time anchors, and optional pending event.
+- `clock_reply` — echoed `probeId`, `c0`, and server receive/send monotonic timestamps `s1`, `s2`, with `clockEpoch`.
+- `error` — machine-readable error code (`unauthorized`, `forbidden`, `not_ready`, `no_track`, `invalid_state`, `invalid_message`, `rate_limited`, etc.).
+
+Sample clock estimate: `offset_server_minus_client = ((s1-c0)+(s2-c3))/2`, `RTT=(c3-c0)-(s2-s1)`. A client measures `c0`/`c3` using its own monotonic timer. Estimate quality degrades when RTT is too high or the sample gets stale. Monotonic time in milliseconds is meaningful only inside the named clock epoch; it must not be compared to UTC timestamps or retained across server restarts.
+
+### Scheduled action semantics
+
+When authorized, the server accepts a command and broadcasts one `pending` event with a unique ID and a target `executeServerMs` at least **2500 ms** ahead of server time. All current ready clients translate that target using their estimated server clock and schedule local player operations. At deadline the server atomically commits the event and broadcasts a new snapshot. New host commands replace older pending events, and stale timers are rejected by ID and track generation. Clients compare `stateRevision` and `trackGeneration`; control messages do not carry media URLs or paths. Pause/seek use the server's authoritative anchor. During disconnection, the prototype pauses local playback rather than free-running.
+
+This is a *best-effort* synchronized playback baseline. There is no distributed arm/ack/commit consensus, guaranteed simultaneous audio output, jitter buffer calibration, or verified audio-device latency model. A `QMediaPlayer.position` match is not proof of acoustic synchronization. Cross-network public deployments still require abuse-defense hardening, managed TLS termination, and real devices for testing.

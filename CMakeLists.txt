@@ -34,7 +34,7 @@ endif()
 
 if(SPIRAL_BUILD_CLIENT)
     enable_language(CXX)
-    find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 QuickDialogs2 Multimedia)
+    find_package(Qt6 6.8 REQUIRED COMPONENTS Quick QuickControls2 QuickDialogs2 Multimedia WebSockets)
     qt_standard_project_setup(REQUIRES 6.8)
     add_subdirectory(client)
 endif()

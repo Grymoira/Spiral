@@ -33,3 +33,22 @@ jobs:
         run: cmake --build --preset server-only
       - name: Execute CTest
         run: ctest --preset server-only --output-on-failure
+
+  desktop-qt:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install desktop build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
+      - name: Install Qt 6.8 desktop SDK
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          modules: 'qtmultimedia qtwebsockets'
+          cache: false
+      - name: Configure Qt desktop client
+        run: cmake --preset dev -DSPIRAL_BUILD_SERVER=OFF
+      - name: Compile Qt desktop client
+        run: cmake --build --preset dev --parallel 2

@@ -82,3 +82,23 @@ that GitHub Actions run 40345650523 for that earlier commit completed successful
 - Real audio output and multi-device synchronization; WSS/clock/scheduling are still
   unimplemented. The new GitHub Actions workflow requires a new remote run before
   its results can be reported as successful.
+
+## Server-coordinated synchronization implementation — 2026-10-27
+
+User priority: real-time network connections and synchronized local playback. Based on `main` commit `b06fb319f0f6fcf99ccdfe4600c7374d7ae8f019` (the preceding reviewed baseline). No existing repository files were discarded.
+
+Implemented:
+
+- Go RFC 6455 text WebSocket with 4 KiB frame/message bound, required client masking, limited accepted opcodes, control ping/pong, origin check, and message rate limiting. Initial authenticated hello uses token in the first frame (not URL). HTTPS/WSS listener can bind to a public address only with a server certificate/key; without TLS the server binds exclusively to loopback.
+- Bound room authority: member-ready state, 64-hex SHA-256 recording identity, per-track generation, server clock epoch, monotonic timeline, room state revision, and a replaceable future action with ID and deadline. Old scheduled events and old-track confirmations cannot commit.
+- Readiness barrier before play, host-only track/schedule control, authorization on every inbound WS command, state broadcast, room snapshot and client reconnect handling. Disconnected members lose readiness.
+- Qt Quick client source: HTTP(S) creation and join, authenticated WS/WSS, local file hashing, local media-load check, four-timestamp offset and jitter filtering, future action timer, pause/seek/play authority reconciliation, large-error corrective seeks, pause-on-disconnect and session re-auth.
+- Full first-party `LICENSE` with MIT text. Dependency distribution notices are separately documented.
+
+Verification:
+
+- Go `go test -race -count=1 ./...` including two genuine independently connected TCP WebSocket clients — **PASS** on local Linux Go 1.23.2.
+- Go `go vet ./...`, `go test -race -count=2 ./...`, `go build -o /mnt/data/spiral-server-smoke ./cmd/spiral-server`, `cmake --preset server-only`, `cmake --build --preset server-only`, `ctest --preset server-only --output-on-failure` — **PASS** (Linux x86_64, Go 1.23.2, CMake 3.31.6; CTest 1/1).
+- **Not executed:** Qt 6.8+ build or QML runtime (Qt SDK absent), two physical devices, TLS on a public Internet host, real acoustic alignment or sample-level latency/error measurements.
+
+**Milestone interpretation:** this is a practical first slice of Phase 2/3 (synchronization protocol and two-socket transport), not completion of Phase 2/3 acceptance. The earlier `docs/adr/0001-loopback-bootstrap.md` remains a historical account of the original HTTP-only baseline; see `docs/adr/0002-coordinated-realtime-sync.md` for the new transport direction.

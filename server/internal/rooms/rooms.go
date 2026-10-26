@@ -26,14 +26,19 @@ var (
 )
 
 type Member struct {
-	ID   string `json:"id"`
-	Role string `json:"role"`
+	ID    string `json:"id"`
+	Role  string `json:"role"`
+	Ready bool   `json:"ready"`
 }
 
 type Snapshot struct {
 	RoomID        string   `json:"roomId"`
 	StateRevision uint64   `json:"stateRevision"`
 	Members       []Member `json:"members"`
+	RoomEpoch     string   `json:"roomEpoch"`
+	ClockEpoch    string   `json:"clockEpoch"`
+	ServerMs      int64    `json:"serverMs"`
+	Playback      Playback `json:"playback"`
 }
 
 type Credentials struct {
@@ -50,20 +55,29 @@ type membership struct {
 }
 
 type room struct {
-	id       string
-	invite   string
-	revision uint64
-	members  map[string]membership // Key is an unpredictable session token.
+	id        string
+	invite    string
+	revision  uint64
+	epoch     string
+	nextEvent uint64
+	playback  Playback
+	members   map[string]membership // Key is an unpredictable session token.
 }
 
 type Store struct {
-	mu    sync.Mutex
-	rooms map[string]*room
-	now   func() time.Time
+	mu         sync.Mutex
+	rooms      map[string]*room
+	now        func() time.Time
+	started    time.Time
+	clockEpoch string
 }
 
 func NewStore() *Store {
-	return &Store{rooms: make(map[string]*room), now: time.Now}
+	epoch, err := randomToken(12)
+	if err != nil {
+		panic("cryptographic random unavailable")
+	}
+	return &Store{rooms: make(map[string]*room), now: time.Now, started: time.Now(), clockEpoch: epoch}
 }
 
 func randomToken(n int) (string, error) {
@@ -92,7 +106,7 @@ func (s *Store) Create() (Credentials, error) {
 		return Credentials{}, err
 	}
 	expires := s.now().Add(sessionLifetime)
-	r := &room{id: id, invite: invite, revision: 1, members: map[string]membership{
+	r := &room{id: id, epoch: id, invite: invite, revision: 1, playback: Playback{PlayState: "paused"}, members: map[string]membership{
 		token: {member: Member{ID: memberID, Role: "host"}, expiresAt: expires},
 	}}
 	s.mu.Lock()
@@ -171,13 +185,22 @@ func (s *Store) Snapshot(roomID, token string) (Snapshot, error) {
 	if _, ok := r.members[token]; !ok {
 		return Snapshot{}, ErrUnauthorized
 	}
-	snap := Snapshot{RoomID: roomID, StateRevision: r.revision, Members: make([]Member, 0, len(r.members))}
+	return s.snapshot(r), nil
+}
+
+// snapshot must be called while holding s.mu.
+func (s *Store) snapshot(r *room) Snapshot {
+	snap := Snapshot{RoomID: r.id, RoomEpoch: r.epoch, ClockEpoch: s.clockEpoch, ServerMs: s.ServerMs(), Playback: r.playback, StateRevision: r.revision, Members: make([]Member, 0, len(r.members))}
 	for _, m := range r.members {
 		snap.Members = append(snap.Members, m.member)
 	}
 	// Stable ordering is useful for clients and reproducible tests.
 	sortMembers(snap.Members)
-	return snap, nil
+	if snap.Playback.Pending != nil {
+		e := *snap.Playback.Pending
+		snap.Playback.Pending = &e
+	}
+	return snap
 }
 
 func sortMembers(m []Member) {

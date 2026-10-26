@@ -1,5 +1,7 @@
 qt_add_executable(spiral-client
     src/main.cpp
+    src/synctools.cpp
+    src/synctools.h
 )
 
 set_source_files_properties(qml/Main.qml PROPERTIES QT_RESOURCE_ALIAS Main.qml)
@@ -15,6 +17,7 @@ target_link_libraries(spiral-client PRIVATE
     Qt6::QuickControls2
     Qt6::QuickDialogs2
     Qt6::Multimedia
+    Qt6::WebSockets
 )
 set_target_properties(spiral-client PROPERTIES
     WIN32_EXECUTABLE TRUE

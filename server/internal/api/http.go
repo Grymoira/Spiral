@@ -9,18 +9,29 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"reflect"
 	"strings"
 
+	"github.com/Grymoira/Spiral/server/internal/realtime"
 	"github.com/Grymoira/Spiral/server/internal/rooms"
 )
 
 const maxRequestBytes = 4096
 
-type Handler struct{ Store *rooms.Store }
+type Handler struct {
+	Store *rooms.Store
+	Hub   *realtime.Hub
+}
 
-func NewHandler(store *rooms.Store) http.Handler { return &Handler{Store: store} }
+func NewHandler(store *rooms.Store) http.Handler {
+	return &Handler{Store: store, Hub: realtime.NewHub(store)}
+}
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/v1/ws" {
+		h.Hub.ServeHTTP(w, r)
+		return
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.URL.Path == "/healthz" {
@@ -75,6 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, creds)
+		h.Hub.Broadcast(roomID)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "join" {
@@ -102,6 +114,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		h.Hub.Broadcast(roomID)
 		return
 	}
 	if len(parts) == 3 && parts[1] == "members" && parts[2] == "me" {
@@ -131,7 +144,7 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	if err != nil {
 		return err
 	}
-	if err := validateObjectKeys(body); err != nil {
+	if err := validateObjectKeys(body, v); err != nil {
 		return err
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
@@ -139,7 +152,22 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	return decoder.Decode(v)
 }
 
-func validateObjectKeys(body []byte) error {
+func validateObjectKeys(body []byte, v any) error {
+	allowed := map[string]bool{}
+	typ := reflect.TypeOf(v)
+	if typ.Kind() != reflect.Pointer || typ.Elem().Kind() != reflect.Struct {
+		return errors.New("JSON schema must be a struct pointer")
+	}
+	typ = typ.Elem()
+	for i := 0; i < typ.NumField(); i++ {
+		tag := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		if tag == "" {
+			tag = typ.Field(i).Name
+		}
+		if tag != "-" {
+			allowed[tag] = true
+		}
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	first, err := decoder.Token()
 	if err != nil {
@@ -155,7 +183,7 @@ func validateObjectKeys(body []byte) error {
 			return err
 		}
 		key, ok := token.(string)
-		if !ok || seen[key] {
+		if !ok || seen[key] || !allowed[key] {
 			return errors.New("duplicate or invalid JSON object key")
 		}
 		seen[key] = true
