@@ -1,0 +1,18 @@
+# Local build and tooling artifacts
+/build/
+/out/
+.cmake/
+CMakeUserPresets.json
+*.user
+*.user.*
+*.swp
+.DS_Store
+Thumbs.db
+
+# Local secrets and testing artifacts
+.env
+.env.*
+!.env.example
+*.log
+coverage.out
+*.test

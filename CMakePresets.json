@@ -1,0 +1,34 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 24, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "dev",
+      "displayName": "Spiral desktop development",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/dev",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SPIRAL_BUILD_CLIENT": "ON"
+      }
+    },
+    {
+      "name": "server-only",
+      "displayName": "Server and tests (no Qt SDK required)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/server-only",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "SPIRAL_BUILD_CLIENT": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "dev", "configurePreset": "dev" },
+    { "name": "server-only", "configurePreset": "server-only" }
+  ],
+  "testPresets": [
+    { "name": "dev", "configurePreset": "dev", "output": { "outputOnFailure": true } },
+    { "name": "server-only", "configurePreset": "server-only", "output": { "outputOnFailure": true } }
+  ]
+}

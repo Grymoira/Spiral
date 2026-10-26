@@ -1,0 +1,26 @@
+name: Go baseline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+      - name: Verify formatting
+        run: test -z "$(gofmt -l server)"
+      - name: Unit tests with race detector
+        working-directory: server
+        run: go test -race -count=1 ./...
+      - name: Build server
+        working-directory: server
+        run: go build ./cmd/spiral-server
