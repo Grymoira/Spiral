@@ -15,7 +15,7 @@
 
 ## Build and test
 
-Requirements: CMake >= 3.24, Ninja, Go >= 1.23. To build the desktop client, also install a Qt 6.8+ SDK with Quick, Quick Controls, Multimedia, and Qt Quick Dialogs.
+Requirements: CMake >= 3.24, Ninja, Go >= 1.23. The server-only CMake preset requires neither a C++ compiler nor Qt. To build the desktop client, also install a Qt 6.8+ SDK with Quick, Quick Controls, Multimedia, and Qt Quick Dialogs.
 
 ```sh
 # No Qt SDK required for the Go baseline:
@@ -28,6 +28,8 @@ cd server && go test -race -count=1 ./...
 cmake --preset dev
 cmake --build --preset dev
 ```
+
+If Go is not installed but only the Qt experiment is needed, explicitly configure `-DSPIRAL_BUILD_SERVER=OFF` and `-DSPIRAL_BUILD_CLIENT=ON`. When a requested component's toolchain is missing, configuration now fails rather than silently reporting an empty successful build.
 
 Run the development server:
 
@@ -43,7 +45,7 @@ curl -sS -X POST http://127.0.0.1:8787/v1/rooms \
   -H 'Content-Type: application/json' -d '{}'
 ```
 
-The response contains the host session token and invitation code. See [`protocol/README.md`](protocol/README.md) for supported prototype operations. **Do not bind this plaintext development server to public interfaces or use it as an Internet-facing service.**
+The response contains the host session token and invitation code. See [`protocol/README.md`](protocol/README.md) for supported prototype operations and JSON validation behavior. The HTTP listener verifies that its actual bound address is loopback before serving requests. **Do not bind this plaintext development server to public interfaces or use it as an Internet-facing service.**
 
 ## Project documents
 

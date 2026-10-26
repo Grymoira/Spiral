@@ -127,3 +127,38 @@ func TestRoomLimitAndExpirationCleanup(t *testing.T) {
 		t.Fatalf("expired rooms should be collected: %v", err)
 	}
 }
+
+func TestExpiredGuestSeatAndCredentialRevocation(t *testing.T) {
+	now := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
+	s := NewStore()
+	s.now = func() time.Time { return now }
+	host, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := s.Join(host.RoomID, host.InviteCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// No session renewal is implemented in this prototype. Put only the
+	// guest past expiration while keeping host valid for this focused test.
+	s.mu.Lock()
+	r := s.rooms[host.RoomID]
+	g := r.members[guest.SessionToken]
+	g.expiresAt = now.Add(-time.Second)
+	r.members[guest.SessionToken] = g
+	s.mu.Unlock()
+	snap, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.StateRevision != 3 || len(snap.Members) != 1 {
+		t.Fatalf("expired guest not reaped: %+v", snap)
+	}
+	if _, err = s.Snapshot(host.RoomID, guest.SessionToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expired credential: %v", err)
+	}
+	if _, err = s.Join(host.RoomID, host.InviteCode); err != nil {
+		t.Fatalf("seat not reusable: %v", err)
+	}
+}

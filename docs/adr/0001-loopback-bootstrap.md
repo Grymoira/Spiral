@@ -16,3 +16,10 @@ The server rejects a non-loopback plaintext listen address. Sessions live only i
 ## Consequences
 
 The bootstrap is easy to build and has meaningful race-tested behavior without external Go dependencies. It cannot perform cross-network synchronization. A separate ADR and complete contract review are required before implementing authenticated WSS and public deployment, including rate limits, recovery semantics, transport security, privacy and clock uncertainty.
+
+## Follow-up: loopback and JSON hardening (2026-10-26)
+
+The listener also verifies the bound TCP IP before serving, rather than trusting a
+`localhost` hostname or only the requested listen string. The JSON endpoints require
+a single object and reject ambiguous duplicate top-level keys. This does not make
+plain HTTP appropriate for network or Internet exposure.

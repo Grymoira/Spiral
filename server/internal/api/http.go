@@ -3,9 +3,11 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -61,18 +63,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	roomID := parts[0]
 	if len(parts) == 2 && parts[1] == "join" && r.Method == http.MethodPost {
 		var body struct {
-			InviteCode string `json:"inviteCode"`
+			InviteCode *string `json:"inviteCode"`
 		}
-		if err := decodeJSON(w, r, &body); err != nil {
+		if err := decodeJSON(w, r, &body); err != nil || body.InviteCode == nil || *body.InviteCode == "" {
 			writeError(w, http.StatusBadRequest, "invalid_json")
 			return
 		}
-		creds, err := h.Store.Join(roomID, body.InviteCode)
+		creds, err := h.Store.Join(roomID, *body.InviteCode)
 		if err != nil {
 			writeRoomError(w, err)
 			return
 		}
 		writeJSON(w, http.StatusCreated, creds)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "join" {
+		w.Header().Set("Allow", "POST")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
@@ -84,12 +91,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, snap)
 		return
 	}
+	if len(parts) == 1 {
+		w.Header().Set("Allow", "GET")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+		return
+	}
 	if len(parts) == 3 && parts[1] == "members" && parts[2] == "me" && r.Method == http.MethodDelete {
 		if err := h.Store.Leave(roomID, bearer(r)); err != nil {
 			writeRoomError(w, err)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if len(parts) == 3 && parts[1] == "members" && parts[2] == "me" {
+		w.Header().Set("Allow", "DELETE")
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
 	writeError(w, http.StatusNotFound, "not_found")
@@ -103,17 +120,56 @@ func bearer(r *http.Request) string {
 	return strings.TrimPrefix(value, "Bearer ")
 }
 
+// decodeJSON accepts only a single JSON object with unique top-level keys.
+// Keeping the wire contract strict avoids ambiguity between future clients.
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
-	if r.Header.Get("Content-Type") != "application/json" {
-		return errors.New("content-type must be application/json")
+	mediaType, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" || (params["charset"] != "" && !strings.EqualFold(params["charset"], "utf-8")) {
+		return errors.New("content-type must be application/json with UTF-8 encoding")
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBytes)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(v); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxRequestBytes))
+	if err != nil {
 		return err
 	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+	if err := validateObjectKeys(body); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
+}
+
+func validateObjectKeys(body []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	first, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	if first != json.Delim('{') {
+		return errors.New("JSON root must be an object")
+	}
+	seen := make(map[string]bool)
+	for decoder.More() {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := token.(string)
+		if !ok || seen[key] {
+			return errors.New("duplicate or invalid JSON object key")
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	last, err := decoder.Token()
+	if err != nil || last != json.Delim('}') {
+		return errors.New("invalid JSON object end")
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		return errors.New("trailing JSON")
 	}
 	return nil

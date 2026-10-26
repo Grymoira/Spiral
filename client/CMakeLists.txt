@@ -13,6 +13,7 @@ target_compile_features(spiral-client PRIVATE cxx_std_20)
 target_link_libraries(spiral-client PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
+    Qt6::QuickDialogs2
     Qt6::Multimedia
 )
 set_target_properties(spiral-client PROPERTIES

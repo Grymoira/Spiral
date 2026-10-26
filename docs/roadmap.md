@@ -2,7 +2,7 @@
 
 The original SyncMusic research described Phase 0–7, but no corresponding source files existed in this Spiral repository at initialization. These are the milestone mappings for work going forward; completing a source file is not equivalent to validating the milestone.
 
-- [ ] **Phase 0 / Milestone A — reproducible baseline.** Go room core and HTTP development server, tests, initial Qt local audio player and CMake/CI scaffolding are implemented. Go baseline tested on Linux. Qt client build and runtime, Windows/macOS builds, and audio test remain unverified.
+- [ ] **Phase 0 / Milestone A — reproducible baseline.** Go room core and HTTP development server, tests, initial Qt local audio player and CMake/CI scaffolding are implemented. Go baseline tested on Linux. Qt client build and runtime, Windows/macOS builds, and audio test remain unverified. A follow-up review hardened loopback binding, JSON validation, method responses and CMake missing-toolchain behavior; local Go tests and the Linux server-only build pass.
 - [ ] **Phase 1 / Milestone B — audio capability experiment.** Measure local playback, seek, actual playback rate support, buffer and output timing; document backend limitations with test audio.
 - [ ] **Phase 2 / Milestone C — sync protocol v1.** Finalize authenticated WSS, versioned contract, room authority, track identity, monotonic clocks, readiness barrier, scheduling and error semantics; executable Go/C++ contract tests.
 - [ ] **Phase 3 / Milestone D — two-client synchronization.** Connect two client instances, load identical verified test audio, measure scheduling/drift, handle pause/seek/reconnect; then real devices and audio measurement.

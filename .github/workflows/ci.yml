@@ -1,4 +1,4 @@
-name: Go baseline
+name: Go and CMake baseline
 
 on:
   push:
@@ -18,9 +18,18 @@ jobs:
           cache: false
       - name: Verify formatting
         run: test -z "$(gofmt -l server)"
+      - name: Static analysis
+        working-directory: server
+        run: go vet ./...
       - name: Unit tests with race detector
         working-directory: server
         run: go test -race -count=1 ./...
-      - name: Build server
+      - name: Build server (Windows-safe output naming)
         working-directory: server
-        run: go build ./cmd/spiral-server
+        run: go build -o "${{ runner.temp }}/spiral-server" ./cmd/spiral-server
+      - name: Configure CMake without Qt
+        run: cmake --preset server-only
+      - name: Build CMake server target
+        run: cmake --build --preset server-only
+      - name: Execute CTest
+        run: ctest --preset server-only --output-on-failure

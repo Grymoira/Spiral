@@ -10,5 +10,7 @@
 - Keep Qt UI code independent from room authority. Qt Multimedia position does not prove actual acoustic synchronization.
 - Use C++20, Qt 6.8+, Go 1.23+, CMake, CTest, and Go's standard tooling unless an ADR explicitly approves another dependency.
 - Run relevant tests and record exact failures or missing SDKs. Never claim unrun tests passed.
-- Keep the prototype HTTP API restricted to loopback; any public deployment needs authenticated WSS/TLS, abuse limits, and a threat-model review.
+- Keep the prototype HTTP API restricted to verified loopback-bound sockets; any public deployment needs authenticated WSS/TLS, abuse limits, and a threat-model review.
+- Reject ambiguous JSON objects and inconsistent API authorization before evolving the protocol.
+- A selected build component must fail configuration when its required toolchain is absent; a zero-test run is not validation.
 - Update `docs/DEVELOPMENT_STATUS.md` and roadmap whenever milestone scope changes.
