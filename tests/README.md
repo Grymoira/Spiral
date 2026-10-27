@@ -32,3 +32,23 @@ exercises authenticated snapshot reads with an actual WebSocket connection.
 These automated tests cannot measure audio output at speakers. Hardware
 suspend/resume, a real network partition and two-device acoustic captures
 remain separate release-blocking evidence under Issue #11.
+
+## Offline physical-acoustic acceptance tooling
+
+See [ACOUSTIC_ACCEPTANCE.md](ACOUSTIC_ACCEPTANCE.md). The stdlib-only
+`tools/audio_alignment.py` creates a reference mono click track and analyzes
+a single **shared-clock, stereo PCM16** recording of two separate outputs.
+It calculates signed right-minus-left onset bias and absolute
+P50/P95/max; detection of lost clicks, unpaired clicks or clipped PCM is a
+hard **INCOMPLETE**, never silently dropped from the denominator.
+
+`python3 -m unittest discover -v -s tools/tests -p 'test_*.py'` runs
+**synthetic** WAV fixtures that test the analysis algorithm. No test fixture
+is evidence of physical Qt audio, actual stereo channel separation, pause/seek
+latency, real operating-system suspend or network partitions.
+
+The new source-derived QML test `client/tests/media_buffer_safety.test.cjs`
+checks actual `handleMediaStatusChanged`, Ready(false), immediate local pause,
+obsolete COMMIT timer removal and fresh snapshot fencing when buffered media
+recovers quickly. Qt decoding/output errors are also exercised while the
+mock still reports a nominal BufferedMedia state.
