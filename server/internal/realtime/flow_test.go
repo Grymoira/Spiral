@@ -195,6 +195,9 @@ func TestTwoClientRealWebSocketTimeline(t *testing.T) {
 	h.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 4 })
 	g.send(t, map[string]any{"type": "ready", "trackId": strings.Repeat("a", 64), "trackGeneration": 1, "ready": true})
 	g.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 5 })
+	// Optimistic host commands must use the latest authoritative revision.
+	// The guest's Ready changed the room after the host's previous snapshot.
+	h.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 5 })
 	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
 	pendingH := h.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
 	pendingG := g.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
