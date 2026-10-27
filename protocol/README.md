@@ -149,3 +149,18 @@ pauses playback and timers, attempts to withdraw Ready and requires fresh
 clock calibration. Normal idle probing remains 15s. This is *bounded local
 best-effort detection*, not consensus or physical acoustic synchronization.
 OS suspension, packet loss and Qt scheduling delay can exceed this window.
+
+### Pending-event fencing after membership/readiness loss (Issue #11, phase 3)
+
+If a member withdraws Ready, leaves via REST, expires, or a new member joins,
+the server cancels an already committed but not-yet-executed playing event
+even when all remaining members are Ready. The same rule applies to uncommitted
+arming events. A forced suspension of an already-playing timeline discards
+a stale future-projected pause to avoid moving the frozen media anchor forward
+at its former deadline. Explicit seeks scheduled while already paused are
+preserved.
+
+The authoritative snapshot reports the resulting state/revision, but delivery
+during a network partition is not guaranteed. Explicit event-scoped CANCEL
+receipt semantics, real Qt output and acoustic measurements remain required
+before closing Issue #11.

@@ -358,3 +358,78 @@ func TestDisconnectCancelsScheduledPlayForRoom(t *testing.T) {
 		t.Fatalf("old timer restarted playback: %+v", final.Playback)
 	}
 }
+
+func TestRESTLeaveFencesCommittedPlayAndNotifiesRemainingSocket(t *testing.T) {
+	store := rooms.NewStore()
+	server := httptest.NewServer(api.NewHandler(store))
+	defer server.Close()
+	host := httpRoom(t, server.Client(), server.URL+"/v1/rooms", `{}`)
+	guest := httpRoom(t, server.Client(), server.URL+"/v1/rooms/"+host.RoomID+"/join",
+		`{"inviteCode":"`+host.InviteCode+`"}`)
+	addr := strings.TrimPrefix(server.URL, "http://")
+	h := connect(t, addr)
+	g := connect(t, addr)
+	h.send(t, map[string]any{"type": "auth", "roomId": host.RoomID, "sessionToken": host.SessionToken})
+	g.send(t, map[string]any{"type": "auth", "roomId": host.RoomID, "sessionToken": guest.SessionToken})
+	h.until(t, "auth_ok", nil)
+	g.until(t, "auth_ok", nil)
+	h.until(t, "snapshot", nil)
+	g.until(t, "snapshot", nil)
+	hash := strings.Repeat("b", 64)
+	h.send(t, map[string]any{"type": "track", "sha256": hash, "durationMs": 20000})
+	h.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["trackId"] == hash })
+	g.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["trackId"] == hash })
+	for _, c := range []*testConn{h, g} {
+		c.send(t, map[string]any{"type": "ready", "trackId": hash, "trackGeneration": 1, "ready": true})
+	}
+	h.until(t, "snapshot", func(m map[string]any) bool {
+		members := state(m)["members"].([]any)
+		return len(members) == 2 && members[0].(map[string]any)["ready"] == true &&
+			members[1].(map[string]any)["ready"] == true
+	})
+	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
+	armed := h.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "arming"
+	})
+	id := uint64(playback(armed)["pending"].(map[string]any)["id"].(float64))
+	g.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "arming"
+	})
+	for _, c := range []*testConn{h, g} {
+		c.send(t, map[string]any{"type": "arm_ack", "trackId": hash,
+			"trackGeneration": 1, "eventId": id})
+	}
+	confirmed := h.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "committed"
+	})
+	if playback(confirmed)["pending"].(map[string]any)["executeServerMs"].(float64) <= 0 {
+		t.Fatal("missing committed play deadline")
+	}
+	req, err := http.NewRequest(http.MethodDelete,
+		server.URL+"/v1/rooms/"+host.RoomID+"/members/me", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+guest.SessionToken)
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		t.Fatalf("guest leave returned %d", res.StatusCode)
+	}
+	canceled := h.until(t, "snapshot", func(m map[string]any) bool {
+		return state(m)["stateRevision"].(float64) > state(confirmed)["stateRevision"].(float64) &&
+			playback(m)["pending"] == nil
+	})
+	if playback(canceled)["playState"] != "paused" {
+		t.Fatalf("member departure failed to cancel play: %v", playback(canceled))
+	}
+	if _, committed := store.CommitEvent(host.RoomID, id); committed {
+		t.Fatal("stale future playing event committed after REST leave")
+	}
+}
