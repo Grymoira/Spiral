@@ -235,3 +235,45 @@ therefore block playback. The connection must be upgraded consistently across
 all members. A forged application ACK from an already authenticated client is
 not proof of acoustic silence. Physical output timing and network partition
 after COMMIT remain outside the demonstrated guarantee.
+
+### Recovering after OS suspend / clock discontinuity (Issue #11, phase 6)
+
+A Qt client may observe that its monotonic clock advanced much less than
+UTC wall time while the device was asleep. `SyncTools::clockContinuityOk()`
+compares these elapsed intervals on each relevant callback. A difference
+greater than 1500 ms, a reversed clock, or a reset monotonic clock triggers a
+**local fail-closed pause**, withdrawal of Ready, cancellation of any scheduled
+local timer, and reset of the clock-probe model. The client must obtain a
+correlated fresh authority snapshot and recalibrate before it may become
+Ready again. This guard complements the 2.5-second authority-contact lease
+and 250 ms late-commit skip; it does not use UTC wall time for scheduling
+audio, and a local clock adjustment may intentionally trigger a false alarm.
+
+After discontinuity, the authenticated client sends:
+
+```json
+{"type":"snapshot","operationId":"unique-safe-identifier"}
+```
+
+The server validates an 8–64 character operation identifier (ASCII
+letters, digits, underscore or hyphen), verifies the current authenticated
+WebSocket peer and returns a **unicast**, read-only, correlated response:
+
+```json
+{"type":"snapshot","operationId":"unique-safe-identifier","state":{"roomId":"...","stateRevision":7}}
+```
+
+The state above is abbreviated; actual responses contain the existing
+complete authoritative room snapshot. No access token, media URL, absolute
+local file path or invitation is included. A broadcast `snapshot` without
+the matching `operationId` **must not** release the local wake barrier.
+The client retransmits its *same* recovery request, at most once per
+1.2 seconds, until a matching response arrives. A reconnect resets the
+old request and starts a new authenticated session snapshot sequence.
+
+**Limits:** The 1500 ms clock-divergence test cannot detect every suspend
+pattern; on platforms where the monotonic clock advances with wall time,
+ordinary elapsed authority freshness and late-event checks remain decisive.
+The mechanism prevents using old local timers after detected discontinuities
+but does not guarantee timely cancellation delivery during a hard network
+partition, and still does not measure DAC/acoustic output.
