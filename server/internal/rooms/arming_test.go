@@ -131,9 +131,23 @@ func TestCancelOrReplaceArmingRevokesOldAcks(t *testing.T) {
 		t.Fatal(err)
 	}
 	now, _ := s.Snapshot(host.RoomID, host.SessionToken)
+	if _, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0,
+		"arm-replace-2", now.StateRevision); !errors.Is(err, ErrCancellationPending) || applied {
+		t.Fatalf("replacement bypassed cancellation receipt barrier: %v", err)
+	}
+	if canceled.Cancellation == nil {
+		t.Fatal("expected event-scoped canceled ARM watermark")
+	}
+	for _, token := range []string{host.SessionToken, guest.SessionToken} {
+		if _, applied, err := s.AcknowledgeCancellation(host.RoomID, token, now.RoomEpoch,
+			canceled.Cancellation.TrackGeneration, canceled.Cancellation.EventID,
+			canceled.Cancellation.StateRevision); err != nil || !applied {
+			t.Fatalf("cannot acknowledge old ARM withdrawal: %v", err)
+		}
+	}
 	newEvent, _, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0, "arm-replace-2", now.StateRevision)
-	if err != nil || newEvent.Playback.Pending.ID == old.ID {
-		t.Fatal("replacement did not change event ID")
+	if err != nil || newEvent.Playback.Pending == nil || newEvent.Playback.Pending.ID == old.ID {
+		t.Fatal("replacement did not change event ID after all receipts")
 	}
 	if _, _, err := s.AcknowledgeArming(host.RoomID, guest.SessionToken, hash, 1, old.ID); !errors.Is(err, ErrInvalidState) {
 		t.Fatalf("old ACK accepted after event replacement: %v", err)
