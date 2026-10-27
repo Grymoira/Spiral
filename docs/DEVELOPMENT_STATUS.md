@@ -143,3 +143,21 @@ macOS/Windows end-user installers. Under network partitioning a previously
 received scheduled command can still be executed by a client before it sees a
 cancellation; the system therefore does not guarantee atomic simultaneous
 playback. This is not a final Release candidate.
+
+## Client transport policy hardening — 2026-10-27
+
+Issue #14: before creating/joining a room, Spiral now validates the server
+origin using Qt's strict URL parser. Plaintext HTTP/WS is accepted only for
+explicit loopback IP addresses or `localhost`; remote servers require
+HTTPS/WSS. Userinfo, queries, fragments and non-root paths are rejected.
+The client constructs WSS/WS URLs only from the validated origin and applies
+the same check before sending an authenticated leave request.
+
+The QML network manager uses a same-origin redirect policy, so an accepted
+server cannot redirect a membership request to another origin or downgrade
+from HTTPS to HTTP. This does **not** replace TLS certificate validation,
+public-host abuse limits, or end-to-end threat modeling.
+
+The Qt desktop CI now runs transport URL and redirect-policy tests, alongside
+existing Qt/QML and Go checks. Real public-host interception and cross-platform
+package validation remain outstanding.
