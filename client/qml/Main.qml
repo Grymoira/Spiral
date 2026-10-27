@@ -178,6 +178,12 @@ ApplicationWindow {
         syncTools.logEvent("client.room_left")
         logText = "Left room"
     }
+    function acceptWakeSnapshot(message) {
+        if (!wakeSnapshotId || message.operationId !== wakeSnapshotId) return false
+        wakeSnapshotId = ""
+        wakeSnapshotLastSentMs = -1
+        return true
+    }
     function requestWakeSnapshot() {
         if (!wakeSnapshotId || !authenticated || socket.status !== WebSocket.Open) return
         var now = syncTools.monotonicMs()
@@ -663,10 +669,7 @@ ApplicationWindow {
                 if (!window.roomState.stateRevision || msg.state.stateRevision >= window.roomState.stateRevision) {
                     window.lastAuthorityReplyMs = syncTools.monotonicMs()
                     window.roomState = msg.state
-                    if (window.wakeSnapshotId && msg.operationId === window.wakeSnapshotId) {
-                        window.wakeSnapshotId = ""
-                        window.wakeSnapshotLastSentMs = -1
-                    }
+                    window.acceptWakeSnapshot(msg)
                     window.applyCancellation(msg.state)
                     if (msg.state.playback && msg.state.playback.trackId && !window.sameRecording()) {
                         player.pause()
