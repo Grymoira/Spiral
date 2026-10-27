@@ -15,3 +15,14 @@ Client-to-server outbound TLS works across NAT/firewall boundaries when both cli
 ## Known gaps
 
 Not sample-accurate; not acoustic synchronized-output proof. No ARM/ACK/COMMIT consensus, no buffer-delay measurement, no drift-rate estimator, and only bounded step-seek correction. JavaScript UI timers have jitter. Clock estimates assume limited RTT/asymmetry and expire after 60 seconds. New server process resets all sessions and clock epoch. A remote public WSS deployment must receive additional abuse/DoS and operations/security review. Next milestone is a Qt SDK build and two *physical* devices with loopback/recorded audio measurements.
+
+## Implementation amendment (2026-10-27)
+
+The "no ARM/ACK/COMMIT" bullet under **Known gaps** describes the **original
+proposal's baseline**. It is now historical: staged PRs through Issue #11
+phase 6 added scoped ARM/ACK/COMMIT, cancellation receipts, missing-ACK
+playback fencing, and correlated snapshot recovery after suspend. Phase 7
+adds Qt buffering/error fail-closed fencing and an **offline** acoustic WAV
+analysis harness. The architecture remains provisional because no real
+two-device acoustic P50/P95/max evidence or cross-platform fault-injection
+acceptance has yet been obtained; the original release blocker remains.
