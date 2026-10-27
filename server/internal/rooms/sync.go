@@ -7,12 +7,12 @@ import (
 )
 
 var (
-	ErrNoTrack           = errors.New("no track selected")
-	ErrNotReady          = errors.New("room members are not ready")
+	ErrNoTrack             = errors.New("no track selected")
+	ErrNotReady            = errors.New("room members are not ready")
 	ErrCancellationPending = errors.New("prior cancellation has unacknowledged members")
-	ErrInvalidState      = errors.New("invalid sync state")
-	ErrRevisionConflict  = errors.New("room revision conflict")
-	ErrOperationConflict = errors.New("operation identifier reused with different payload")
+	ErrInvalidState        = errors.New("invalid sync state")
+	ErrRevisionConflict    = errors.New("room revision conflict")
+	ErrOperationConflict   = errors.New("operation identifier reused with different payload")
 )
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
