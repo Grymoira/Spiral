@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtMultimedia
@@ -14,6 +15,12 @@ ApplicationWindow {
     minimumHeight: 560
     title: "Spiral · synchronized local audio (experimental)"
     color: "#121720"
+    // The window and custom frames are dark: force Material controls to use
+    // a matching palette regardless of the operating-system color scheme.
+    Material.theme: Material.Dark
+    Material.foreground: window.textColor
+    Material.background: "#2b394d"
+    Material.accent: "#8bd2c4"
     readonly property color textColor: "#eff2f7"
     readonly property color secondary: "#b7c4d7"
 
@@ -866,11 +873,11 @@ ApplicationWindow {
                     anchors.fill: parent
                     spacing: 9
                     Label { text:"Connection & room"; font.bold:true; color:window.textColor }
-                    TextField { id: addressField; Layout.fillWidth: true; text: window.serverUrl; placeholderText:"https://your-server.example:8787"; enabled: window.roomId === "" }
+                    TextField { id: addressField; Layout.fillWidth: true; text: window.serverUrl; placeholderText:"https://your-server.example:8787"; placeholderTextColor: window.secondary; enabled: window.roomId === "" }
                     RowLayout {
                         Layout.fillWidth:true
-                        TextField { id:roomField; Layout.fillWidth:true; placeholderText:"Room ID (for joining)"; enabled:window.roomId === "" }
-                        TextField { id:inviteField; Layout.fillWidth:true; placeholderText:"Invitation code"; enabled:window.roomId === "" }
+                        TextField { id:roomField; Layout.fillWidth:true; placeholderText:"Room ID (for joining)"; placeholderTextColor: window.secondary; enabled:window.roomId === "" }
+                        TextField { id:inviteField; Layout.fillWidth:true; placeholderText:"Invitation code"; placeholderTextColor: window.secondary; enabled:window.roomId === "" }
                     }
                     RowLayout {
                         Button { text:"Create room"; enabled:window.roomId === ""; onClicked:window.createRoom() }
