@@ -343,7 +343,12 @@ func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, error) {
 	}
 	switch cmd.Type {
 	case "track":
-		return h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
+		snap, err := h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
+		if err == nil {
+			// Do not allow an old track handler to cancel a newer appointment.
+			h.cancelTimer(p.roomID)
+		}
+		return snap, err
 	case "ready":
 		return h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
 	case "schedule":
@@ -460,7 +465,6 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 		case "track":
 			if err == nil {
 				diagnostic.Info("playback.track_changed", "duration_ms", cmd.DurationMs)
-				h.cancelTimer(p.roomID)
 				h.Broadcast(p.roomID)
 			}
 		case "ready":
