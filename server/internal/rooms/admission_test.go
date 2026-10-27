@@ -57,8 +57,12 @@ func TestPublicCreateRateAndSourceLifetime(t *testing.T) {
 			}
 			created = append(created, c)
 		}
-		if _, err := s.CreateForSource(ip); !errors.Is(err, ErrRateLimited) {
-			t.Fatalf("expected source rate rejection, got %v", err)
+		want := ErrRateLimited
+		if len(created) == maxActiveRoomsPerSource {
+			want = ErrSourceQuota
+		}
+		if _, err := s.CreateForSource(ip); !errors.Is(err, want) {
+			t.Fatalf("expected %v after %d rooms, got %v", want, len(created), err)
 		}
 		now = now.Add(creationWindow)
 	}
