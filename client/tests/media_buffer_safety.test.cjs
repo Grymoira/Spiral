@@ -38,6 +38,7 @@ function setup() {
         start(){signal.starts++;this.running=true;}};
     const ctx={
         selectedHash:hash,memberId:"guest",authenticated:true,clockReady:true,
+        mediaFaulted:false,
         clockEpoch:"epoch",lastClockSampleMs:1990,lastAuthorityReplyMs:1990,
         authorityStaleAfterMs:2500,clockOffsetMs:0,
         wakeSnapshotId:"",wakeSnapshotLastSentMs:-1,
@@ -115,6 +116,23 @@ function sent(signal,type){return signal.sent.filter(v=>v.type===type);}
     assert.equal(sent(signal,"ready").length,3);
     assert.equal(sent(signal,"ready")[2].ready,true);
     assert.equal(signal.plays,0);
+}
+
+// A fatal Qt Multimedia error may leave mediaStatus == BufferedMedia.
+// Retaining the prior Ready or relying only on mediaStatus is unsafe.
+{
+    const {ctx,signal,player}=setup();
+    player.mediaStatus=2;
+    ctx.mediaFaulted=true;
+    ctx.handleMediaStatusChanged();
+    assert.equal(player.playbackState,0);
+    assert.equal(ctx.mediaLoaded(),false);
+    assert.equal(sent(signal,"ready").length,1);
+    assert.equal(sent(signal,"ready")[0].ready,false);
+    assert.equal(sent(signal,"snapshot").length,1);
+    ctx.mediaFaulted=true;
+    ctx.maybeReady();
+    assert.equal(sent(signal,"ready").length,1,"faulted media became Ready again");
 }
 
 // 2) Media invalidation when no READY key remains must still revoke the
