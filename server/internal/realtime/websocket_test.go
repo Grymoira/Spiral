@@ -52,7 +52,7 @@ func TestReadTextRejectsFrameOverLimit(t *testing.T) {
 type deadlineProbeConn struct {
 	net.Conn
 	deadlines []time.Time
-	outgoing bytes.Buffer
+	outgoing  bytes.Buffer
 }
 
 func (c *deadlineProbeConn) SetReadDeadline(deadline time.Time) error {
