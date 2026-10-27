@@ -432,3 +432,35 @@ mechanism cannot prove acoustic silence, physical synchronization or
 guaranteed delivery under partitions. Two-device acoustic P50/P95/max,
 real suspend/reconnect, and fault tolerance acceptance remain required:
 Issue #11 stays OPEN.
+
+## Issue #11 phase 7 — fail-closed Qt buffering and measurable acoustic acceptance (2026-10-27)
+
+Starting baseline: main `718b8f82de9c6e4a517d37d6ed0ee52c23119a6a`.
+Static review exposed a remaining client failure path: Qt Multimedia may report
+StalledMedia/LoadingMedia while playbackState remains PlayingState, but the
+existing `onMediaStatusChanged` only withdrew readiness and `reconcile()`
+could return early without locally pausing. A fast buffer recovery could
+therefore resume playback from stale Ready before server cancellation arrived.
+The new handler first pauses the pipeline and cancels local scheduled/ARM
+bookkeeping, sends Ready(false) even if the previous local Ready key is gone,
+and requires a fresh correlated authoritative (nonplaying) room snapshot
+before Ready can be reannounced. MediaPlayer errors now fault the local source
+even if Qt still reports BufferedMedia; the user must reselect a local file to
+retry it. No media URLs, access tokens or local paths enter the room protocol.
+
+The testing milestone now includes `tools/audio_alignment.py`, an **offline
+stdlib-only** click generator and strict two-channel PCM16 onset-pairing
+analyzer. It compares events sampled on one common stereo recording clock and
+reports signed bias plus absolute P50/P95/max. Missing or unpaired clicks,
+clipped samples, unknown predeclared limits, and too-few real event samples
+cannot produce a success verdict. Hardware provenance is explicitly a
+user-reported claim, not tool-authenticated evidence. Deterministic synthetic
+WAV tests check offsets, missing events, clipping and invalid settings; the
+physical two-device procedure lives in `tests/ACOUSTIC_ACCEPTANCE.md`.
+
+**Do not equate CI with hardware success:** report the exact PR and merged-main
+Actions results after their actual completion. Synthetic WAV offsets are
+algorithm regression tests, not sound emitted by Qt. Real Windows/Linux/macOS
+sleep, buffering, disconnect and combined acoustic acceptance—including
+pre-approved physical thresholds and per-scenario audio captures—remain
+unverified. Keep Issue #11 OPEN.
