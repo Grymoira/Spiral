@@ -326,3 +326,36 @@ and locally pausing a Qt player does not constitute measured DAC/acoustic
 silence. The 2.5 s timeout bounds *detection under an active timer*,
 not guaranteed physical stopping latency during OS suspend; the actual
 two-device and OS fault-injection evidence required by #11 is still absent.
+
+### Host-controlled nonresponsive member recovery (Issue #11, phase 9)
+
+A joined guest that remains authenticated but never acknowledges a cancellation
+intentionally blocks subsequent `play` and playing seek. The coordinator
+**never** converts a missing `cancel_ack` into approval. The host can explicitly
+remove a guest from the authoritative membership using:
+
+```http
+DELETE /v1/rooms/{roomId}/members/{memberId}
+Authorization: Bearer <host-session-token>
+```
+
+A valid host request returns HTTP 204; a non-host receives 403 `host_only`,
+an invalid token 401, and an unknown target 404 `member_not_found`. Removing
+oneself is rejected; the existing `/members/me` endpoint still implements
+voluntary leave and host room teardown. The operation revokes the target token
+under the room lock, suspends current playback and retires any unexecuted
+ARM/COMMIT before excluding the member from the cancellation receipt set.
+The Hub broadcasts the resulting snapshot to survivors and closes sockets
+whose tokens have been revoked. **Survivors must still satisfy ordinary Ready,
+any outstanding cancellation receipts, and a new ARM/ACK/COMMIT.**
+
+The Qt UI exposes an explicit **Remove member** action only to the host, for
+non-host entries. Authentication is **enforced on the server**, regardless of
+the UI; member IDs never appear in diagnostic logs. No timeout-based removal
+policy is enabled because packet jitter alone is not sufficient evidence to
+expel a legitimate member. Manual removal trades group membership for
+availability; it does **not** establish that the removed computer is silent,
+especially if its old socket is silently partitioned. The previously
+documented 2.5 s local watchdog is only a best-effort acoustic safety fallback.
+The actual physical disconnection/removal experiment is still required to
+accept and close #11.
