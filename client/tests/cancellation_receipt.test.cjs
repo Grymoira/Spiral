@@ -27,7 +27,7 @@ function setup() {
     const state = {
         roomEpoch: "room-epoch", stateRevision: 11,
         cancellation: {eventId: 7, trackGeneration: 1, stateRevision: 11},
-        playback: {playState: "paused", pending: null}
+        playback: {trackGeneration: 1, playState: "paused", pending: null}
     };
     const c = {
         authenticated:true, socket:{status:1,sendTextMessage(text) {mock.messages.push(JSON.parse(text));}},
