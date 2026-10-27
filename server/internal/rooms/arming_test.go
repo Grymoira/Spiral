@@ -360,3 +360,117 @@ func TestForcedPauseCancelsObsoleteFuturePauseButPreservesPausedSeek(t *testing.
 		t.Fatalf("legitimate paused seek was canceled: %+v %v", preserved.Playback, err)
 	}
 }
+
+func TestCancellationReceiptRequiresExactEventRevisionAndMember(t *testing.T) {
+	s, host, guest, hash := preparedRoom(t)
+	before, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arming, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0,
+		"cancel-receipt-test", before.StateRevision)
+	if err != nil || !applied || arming.Playback.Pending == nil {
+		t.Fatalf("ARM: %+v %v", arming, err)
+	}
+	originalID := arming.Playback.Pending.ID
+	paused, err := s.SetReady(host.RoomID, guest.SessionToken, hash, arming.Playback.TrackGeneration, false)
+	if err != nil || paused.Playback.Pending != nil || paused.Cancellation == nil {
+		t.Fatalf("cancellation notice missing: %+v %v", paused, err)
+	}
+	c := paused.Cancellation
+	if c.EventID != originalID || c.TrackGeneration != arming.Playback.TrackGeneration ||
+		c.StateRevision != paused.StateRevision || paused.RoomEpoch == "" {
+		t.Fatalf("cancellation must refer to retired event and its revision: %+v", c)
+	}
+	s.mu.Lock()
+	original := s.rooms[host.RoomID].cancellation
+	pendingInitially := len(original.outstanding)
+	s.mu.Unlock()
+	if pendingInitially != 2 {
+		t.Fatalf("expected receipts from both live members, got %d", pendingInitially)
+	}
+	for _, invalid := range []struct {
+		name  string
+		token string
+		epoch string
+		gen   uint64
+		id    uint64
+		rev   uint64
+	}{
+		{"different epoch", host.SessionToken, "other-epoch", c.TrackGeneration, c.EventID, c.StateRevision},
+		{"different generation", host.SessionToken, paused.RoomEpoch, c.TrackGeneration + 1, c.EventID, c.StateRevision},
+		{"different event", host.SessionToken, paused.RoomEpoch, c.TrackGeneration, c.EventID + 1, c.StateRevision},
+		{"different revision", host.SessionToken, paused.RoomEpoch, c.TrackGeneration, c.EventID, c.StateRevision + 1},
+	} {
+		t.Run(invalid.name, func(t *testing.T) {
+			remaining, accepted, err := s.AcknowledgeCancellation(host.RoomID, invalid.token,
+				invalid.epoch, invalid.gen, invalid.id, invalid.rev)
+			if !errors.Is(err, ErrInvalidState) || accepted || remaining != 0 {
+				t.Fatalf("forged receipt accepted: left=%d accepted=%v err=%v", remaining, accepted, err)
+			}
+		})
+	}
+	if _, accepted, err := s.AcknowledgeCancellation(host.RoomID, "invalid-session",
+		paused.RoomEpoch, c.TrackGeneration, c.EventID, c.StateRevision); !errors.Is(err, ErrUnauthorized) || accepted {
+		t.Fatalf("unauthorized receipt accepted: %v", err)
+	}
+	remaining, accepted, err := s.AcknowledgeCancellation(host.RoomID, host.SessionToken,
+		paused.RoomEpoch, c.TrackGeneration, c.EventID, c.StateRevision)
+	if err != nil || !accepted || remaining != 1 {
+		t.Fatalf("host ACK: remaining=%d applied=%v err=%v", remaining, accepted, err)
+	}
+	remaining, accepted, err = s.AcknowledgeCancellation(host.RoomID, host.SessionToken,
+		paused.RoomEpoch, c.TrackGeneration, c.EventID, c.StateRevision)
+	if err != nil || accepted || remaining != 1 {
+		t.Fatalf("duplicate ACK changed count: remaining=%d applied=%v err=%v", remaining, accepted, err)
+	}
+	remaining, accepted, err = s.AcknowledgeCancellation(host.RoomID, guest.SessionToken,
+		paused.RoomEpoch, c.TrackGeneration, c.EventID, c.StateRevision)
+	if err != nil || !accepted || remaining != 0 {
+		t.Fatalf("guest ACK: remaining=%d applied=%v err=%v", remaining, accepted, err)
+	}
+	latest, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil || latest.StateRevision != paused.StateRevision ||
+		latest.Cancellation == nil || latest.Cancellation.EventID != c.EventID {
+		t.Fatalf("ACK must not mutate authoritative playback revision: %+v %v", latest, err)
+	}
+}
+
+func TestCancellationReceiptTracksOnlyLatestEventAndForgetsDepartedMember(t *testing.T) {
+	s, host, guest, _ := preparedRoom(t)
+	before, _ := s.Snapshot(host.RoomID, host.SessionToken)
+	first, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "pause", 0,
+		"cancel-first-pause", before.StateRevision)
+	if err != nil || !applied {
+		t.Fatal(err)
+	}
+	second, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "seek", 1000,
+		"cancel-second-seek", first.StateRevision)
+	if err != nil || !applied || second.Cancellation == nil ||
+		second.Cancellation.EventID != first.Playback.Pending.ID {
+		t.Fatalf("replacement missed retired event: %+v %v", second, err)
+	}
+	firstNotice := *second.Cancellation
+	third, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "pause", 0,
+		"cancel-third-pause", second.StateRevision)
+	if err != nil || !applied || third.Cancellation == nil ||
+		third.Cancellation.EventID != second.Playback.Pending.ID {
+		t.Fatalf("later replacement missed retired event: %+v %v", third, err)
+	}
+	if _, accepted, err := s.AcknowledgeCancellation(host.RoomID, host.SessionToken, third.RoomEpoch,
+		firstNotice.TrackGeneration, firstNotice.EventID, firstNotice.StateRevision); !errors.Is(err, ErrInvalidState) || accepted {
+		t.Fatalf("older cancellation should not supersede the latest: %v", err)
+	}
+	if err := s.Leave(host.RoomID, guest.SessionToken); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil || last.Cancellation == nil || last.Cancellation.EventID != third.Cancellation.EventID {
+		t.Fatalf("leaving guest unexpectedly erased current tombstone: %+v %v", last, err)
+	}
+	remaining, accepted, err := s.AcknowledgeCancellation(host.RoomID, host.SessionToken, last.RoomEpoch,
+		last.Cancellation.TrackGeneration, last.Cancellation.EventID, last.Cancellation.StateRevision)
+	if err != nil || !accepted || remaining != 0 {
+		t.Fatalf("departed guest left an unacknowledgeable receipt: remaining=%d accepted=%v err=%v", remaining, accepted, err)
+	}
+}
