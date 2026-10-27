@@ -7,11 +7,12 @@ import (
 )
 
 var (
-	ErrNoTrack           = errors.New("no track selected")
-	ErrNotReady          = errors.New("room members are not ready")
-	ErrInvalidState      = errors.New("invalid sync state")
-	ErrRevisionConflict  = errors.New("room revision conflict")
-	ErrOperationConflict = errors.New("operation identifier reused with different payload")
+	ErrNoTrack             = errors.New("no track selected")
+	ErrNotReady            = errors.New("room members are not ready")
+	ErrCancellationPending = errors.New("prior cancellation has unacknowledged members")
+	ErrInvalidState        = errors.New("invalid sync state")
+	ErrRevisionConflict    = errors.New("room revision conflict")
+	ErrOperationConflict   = errors.New("operation identifier reused with different payload")
 )
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
@@ -272,9 +273,18 @@ func (s *Store) suspendPlaybackLocked(r *room) {
 	s.pausePlaybackLocked(r)
 }
 
-// discardPendingLocked records an event-specific tombstone before replacing
-// a queued action. A single latest cancellation and at most five acknowledgers
-// bound memory without turning the room into an unbounded event history.
+// pendingCancellationLocked holds the playing-state barrier until every
+// surviving member has acknowledged the latest cancellation watermark.
+// The latest notice is cumulative: its ACK confirms reconciliation to the
+// latest authoritative snapshot, including all earlier canceled appointments.
+func (s *Store) pendingCancellationLocked(r *room) bool {
+	return r.cancellation != nil && len(r.cancellation.outstanding) != 0
+}
+
+// discardPendingLocked records an event-specific, cumulative cancellation
+// watermark before replacing a queued action. Only the latest notice and at
+// most five member acknowledgements are retained, bounding per-room memory.
+
 // Each caller increments r.revision exactly once after this helper returns.
 func (s *Store) discardPendingLocked(r *room) {
 	if e := r.playback.Pending; e != nil {
@@ -388,10 +398,19 @@ func (s *Store) scheduleLocked(r *room, action string, mediaMs int64, requireArm
 		next = "playing"
 	}
 	if next == "playing" {
+		// Preserve the existing not_ready result when any member is not
+		// prepared; an outstanding cancellation is checked only after the
+		// ordinary readiness barrier has passed.
 		for _, member := range r.members {
 			if !member.member.Ready {
 				return ErrNotReady
 			}
+		}
+		// Every survivor must have reconciled the latest retired appointment
+		// before a new audible transition is allowed. Replacing an active
+		// pending event with play would itself create an unconfirmed cancel.
+		if s.pendingCancellationLocked(r) || r.playback.Pending != nil {
+			return ErrCancellationPending
 		}
 	}
 	at := s.ServerMs() + scheduleLeadMs
@@ -434,6 +453,9 @@ func (s *Store) AcknowledgeArming(roomID, token, trackID string, generation, eve
 	}
 	if e.Phase == "committed" {
 		return s.snapshot(r), false, nil
+	}
+	if s.pendingCancellationLocked(r) {
+		return Snapshot{}, false, ErrCancellationPending
 	}
 	if e.Phase != "arming" || s.ServerMs() >= e.ArmExpiresServerMs || !member.member.Ready {
 		return Snapshot{}, false, ErrInvalidState
@@ -503,8 +525,14 @@ func (s *Store) CommitEvent(roomID string, eventID uint64) (Snapshot, bool) {
 	if e == nil || e.Phase != "committed" || e.ID != eventID || e.TrackGeneration != r.playback.TrackGeneration || s.ServerMs() < e.ExecuteServerMs {
 		return Snapshot{}, false
 	}
-	// Recheck the barrier immediately before commit, not only at scheduling.
+	// Recheck both readiness and previously canceled-event receipts at
+	// the deadline. An unexpected unresolved cancellation fails closed.
 	if s.cancelUnreadyPlaybackLocked(r) {
+		r.revision++
+		return s.snapshot(r), false
+	}
+	if e.PlayState == "playing" && s.pendingCancellationLocked(r) {
+		s.discardPendingLocked(r)
 		r.revision++
 		return s.snapshot(r), false
 	}

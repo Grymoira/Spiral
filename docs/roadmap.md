@@ -111,3 +111,21 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       hard network partitions, sleep/wake and actual acoustic silence.
 - [ ] Measure two real devices' onset error (P50/P95/max) with an explicit
       test methodology and acceptance thresholds. Keep Issue #11 OPEN.
+
+## Issue #11 phase 5: enforce cancel-before-next-play
+
+- [x] Reject a new playing-state control until every surviving member ACKs the
+      latest cancellation revision; reject direct pending-to-playing replacement.
+- [x] Keep receipts cumulative across rapid safe cancellations; invalidate
+      obsolete QML timers before the latest watermark ACK.
+- [x] Recheck cancellation fencing at COMMIT; broadcast a resulting canceled
+      revision even when a deadline does not commit.
+- [x] Add Go Store and real two-WebSocket withheld-ACK fault-injection tests,
+      plus shipped-QML rapid-replacement and reconnect regression coverage.
+- [ ] Test true network interruption/OS suspend with Qt Multimedia devices;
+      no software ACK establishes acoustic silence.
+- [ ] Define and collect repeatable two-device onset/pause/seek drift
+      measurements, reported as P50/P95/max with explicit acceptance limits.
+- [ ] Decide practical fail-closed recovery for unresponsive-but-connected
+      members (host removal, timeout expulsion, or admin intervention) without
+      treating a missing ACK as approval. Keep #11 OPEN pending these items.

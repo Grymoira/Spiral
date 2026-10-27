@@ -27,7 +27,7 @@ function setup() {
     const state = {
         roomEpoch: "room-epoch", stateRevision: 11,
         cancellation: {eventId: 7, trackGeneration: 1, stateRevision: 11},
-        playback: {playState: "paused", pending: null}
+        playback: {trackGeneration: 1, playState: "paused", pending: null}
     };
     const c = {
         authenticated:true, socket:{status:1,sendTextMessage(text) {mock.messages.push(JSON.parse(text));}},
@@ -95,6 +95,7 @@ function setup() {
     const {c,mock,state,timer,player}=setup();
     c.scheduledKey="1:8";
     state.playback.playState="playing";
+    state.playback.pending={id:8,phase:"committed",playState:"paused"};
     player.playbackState=2;
     c.applyCancellation(state);
     assert.equal(c.scheduledKey,"1:8");
@@ -102,6 +103,75 @@ function setup() {
     assert.equal(mock.pauses,0);
     c.transmitCancellationReceipt();
     assert.equal(mock.messages.length,1,"old event can be ACKed without stopping new one");
+}
+
+
+// A cumulative watermark revokes every superseded local event, even if the
+// latest tombstone names a different event than our old timer. This covers
+// multiple rapid replacements and skipped intermediate snapshots.
+{
+    const {c,mock,state,timer,player}=setup();
+    c.scheduledKey="1:5";
+    c.deferredPendingKey="1:6";
+    c.armSentKey="1:4";
+    state.cancellation.eventId=7; // old IDs 4,5,6 were never individually seen
+    state.cancellation.stateRevision=13;
+    state.stateRevision=13;
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,0,"old timers must not be cumulatively ACKed");
+    c.applyCancellation(state);
+    assert.equal(c.scheduledKey,"");
+    assert.equal(c.deferredPendingKey,"");
+    assert.equal(c.armSentKey,"");
+    assert.equal(timer.running,false);
+    assert.equal(player.playbackState,0);
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,1);
+    assert.equal(mock.messages[0].eventId,7);
+    assert.equal(mock.messages[0].stateRevision,13);
+}
+
+// A new authoritative event can coexist with a retired-event watermark.
+// Its timer must survive the cumulative reconciliation while old bookkeeping
+// is cleared, and the receipt applies only to the retired revision.
+{
+    const {c,mock,state,timer,player}=setup();
+    state.playback.playState="playing";
+    state.playback.pending={id:9,phase:"committed",playState:"paused"};
+    c.scheduledKey="1:9";
+    c.deferredPendingKey="1:7";
+    c.armSentKey="1:6";
+    c.applyCancellation(state);
+    assert.equal(c.scheduledKey,"1:9","current committed timer was removed");
+    assert.equal(c.deferredPendingKey,"");
+    assert.equal(c.armSentKey,"");
+    assert.equal(timer.running,true);
+    assert.equal(mock.pauses,0);
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,1);
+    assert.equal(mock.messages[0].eventId,7);
+}
+
+// After reconnect the client starts with no prior ACK confirmation and must
+// reapply the latest server state before sending a fresh cancellation receipt.
+{
+    const {c,mock,state}=setup();
+    c.applyCancellation(state);
+    c.cancellationAckKey="";
+    c.cancellationAckConfirmedKey="";
+    c.cancellationAckLastSentMs=-1;
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,1);
+    c.authenticated=false;
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,1);
+    c.authenticated=true;
+    c.cancellationAckKey="";
+    c.cancellationAckConfirmedKey="";
+    c.cancellationAckLastSentMs=-1;
+    c.applyCancellation(state);
+    c.transmitCancellationReceipt();
+    assert.equal(mock.messages.length,2,"reconnect did not replay outstanding notice");
 }
 
 // No receipts are sent while unauthenticated or disconnected.

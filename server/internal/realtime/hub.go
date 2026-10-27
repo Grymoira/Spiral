@@ -412,8 +412,13 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 			}
 			return
 		}
-		if _, ok := h.Store.CommitEvent(roomID, event.ID); ok {
+		state, committed := h.Store.CommitEvent(roomID, event.ID)
+		if committed {
 			h.logger.Info("playback.committed", "component", "synchronization", "event_id", event.ID, "action", event.Action, "track_generation", event.TrackGeneration)
+		}
+		// A failed deadline may have retired the old event and advanced the
+		// revision. Deliver that cancellation instead of silently dropping it.
+		if committed || (state.RoomID != "" && state.Playback.Pending == nil) {
 			h.Broadcast(roomID)
 		}
 	})
@@ -627,6 +632,8 @@ func errorCode(err error) string {
 		return "forbidden"
 	case errors.Is(err, rooms.ErrNotReady):
 		return "not_ready"
+	case errors.Is(err, rooms.ErrCancellationPending):
+		return "cancellation_pending"
 	case errors.Is(err, rooms.ErrNoTrack):
 		return "no_track"
 	case errors.Is(err, rooms.ErrInvalidState):
