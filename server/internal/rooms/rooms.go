@@ -38,9 +38,10 @@ var (
 	ErrRateLimited   = errors.New("room creation rate limited")
 	ErrSourceQuota   = errors.New("source room quota reached")
 	ErrInvalidSource = errors.New("invalid client source")
-	ErrHostOnly      = errors.New("host permission required")
-	ErrMemberNotFound = errors.New("target member not found")
 )
+
+var ErrHostOnly = errors.New("host permission required")
+var ErrMemberNotFound = errors.New("target member not found")
 
 type Member struct {
 	ID    string `json:"id"`
