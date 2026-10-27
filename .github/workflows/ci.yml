@@ -55,7 +55,9 @@ jobs:
       - name: QML clock scheduling regression tests
         run: node client/tests/clock_scheduling.test.cjs
       - name: Transport URL and redirect security regressions
-        run: ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy
+        run: |
+          ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy
+          node client/tests/transport_gate.test.cjs
       - name: Headless QML startup smoke test
         run: |
           set +e
