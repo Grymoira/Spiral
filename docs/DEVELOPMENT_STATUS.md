@@ -464,3 +464,24 @@ algorithm regression tests, not sound emitted by Qt. Real Windows/Linux/macOS
 sleep, buffering, disconnect and combined acoustic acceptance—including
 pre-approved physical thresholds and per-scenario audio captures—remain
 unverified. Keep Issue #11 OPEN.
+
+## Issue #11 phase 8 — silent-partition recovery requires fresh paused authority (2026-10-27)
+
+Source baseline: main `cd40061a0c023c10f2241f165bb484b0a1583b38`.
+A source-derived QML regression previously expected playback to resume from
+its old `playing` snapshot after recalibration and a clock reply, **without**
+a new authoritative room snapshot. That is unsafe when an apparently Open
+WebSocket missed a cancellation or COMMIT. The authority watchdog now
+withdraws Ready even when its cached key is absent, locally pauses/stops
+timers, invalidates the old probe history, and enters the same correlated
+read-only snapshot gate used after sleep and media failure. Clock responses
+cannot release the gate; a matching nonplaying snapshot is required. Tests
+cover the prior fail-open sequence, a mismatched reply, a matching still-playing
+reply, clean paused recovery and lost local readiness bookkeeping.
+
+The client-side recovery guard remains an application-level measure. It
+cannot prove that actual output devices have become silent, cannot overcome
+a coordinator that never responds, and is not proof of synchronized sound.
+CI outcomes must be checked against the exact PR head and merged main,
+not inferred. Physical two-device audio, literal suspend/network impairment,
+and predeclared P50/P95/max acceptance remain unverified. Keep #11 OPEN.
