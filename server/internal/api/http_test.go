@@ -194,7 +194,7 @@ func TestHostOnlyGuestRemovalViaHTTP(t *testing.T) {
 	url := "/v1/rooms/" + host.RoomID + "/members/" + guest.MemberID
 	for _, tc := range []struct {
 		method, token string
-		want int
+		want          int
 	}{
 		{"GET", host.SessionToken, 405},
 		{"DELETE", "", 401},
