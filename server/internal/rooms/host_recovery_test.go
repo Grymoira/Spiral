@@ -71,8 +71,13 @@ func TestHostRemovalRecoversUnacknowledgedCancellationWithoutForgingReceipt(t *t
 	}
 	// Removing a departed member removes their outstanding ACK requirement;
 	// it NEVER pretends the former member has produced a receipt.
-	next, err := s.Schedule(host.RoomID, host.SessionToken, "play", 0)
-	if err != nil || next.Playback.Pending == nil || next.Playback.Pending.Phase != "arming" {
+	base, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0,
+		"host-recovery-play-3", base.StateRevision)
+	if err != nil || !applied || next.Playback.Pending == nil || next.Playback.Pending.Phase != "arming" {
 		t.Fatalf("surviving host cannot start a NEW ARM: %+v %v", next, err)
 	}
 }
