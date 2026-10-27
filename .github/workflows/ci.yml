@@ -17,9 +17,7 @@ jobs:
           go-version-file: server/go.mod
           cache: false
       - name: Verify formatting
-        run: |
-          gofmt -d server
-          test -z "$(gofmt -l server)"
+        run: test -z "$(gofmt -l server)"
       - name: Static analysis
         working-directory: server
         run: go vet ./...

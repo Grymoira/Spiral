@@ -105,11 +105,17 @@ func TestUnclaimedRoomsExpireAndClaimedRoomsSurvive(t *testing.T) {
 	now := time.Date(2026, 10, 27, 0, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
 	unclaimed, err := s.CreateForSource("192.0.2.1")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	claimedByAuth, err := s.CreateForSource("192.0.2.2")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	claimedByJoin, err := s.CreateForSource("192.0.2.3")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.Authorize(claimedByAuth.RoomID, claimedByAuth.SessionToken); err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +139,9 @@ func TestUnclaimedRoomsExpireAndClaimedRoomsSurvive(t *testing.T) {
 func TestSourceAddressCanonicalizationAndRejection(t *testing.T) {
 	s := NewStore()
 	c, err := s.CreateForSource("::ffff:192.0.2.8")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got := s.rooms[c.RoomID].source; got != "192.0.2.8" {
 		t.Fatalf("IPv4-mapped IPv6 was not collapsed: %q", got)
 	}

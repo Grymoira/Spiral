@@ -23,20 +23,20 @@ const (
 
 	// Accepted public API creations are bounded in one rolling minute. The
 	// fixed global window also bounds the per-source rate-accounting memory.
-	creationWindow           = time.Minute
-	maxCreationsPerWindow    = 48
-	maxCreationsPerSource    = 6
-	maxActiveRoomsPerSource  = 24
+	creationWindow          = time.Minute
+	maxCreationsPerWindow   = 48
+	maxCreationsPerSource   = 6
+	maxActiveRoomsPerSource = 24
 )
 
 var (
-	ErrNotFound     = errors.New("room not found")
-	ErrForbidden    = errors.New("invalid room invitation")
-	ErrUnauthorized = errors.New("invalid or expired session")
-	ErrFull         = errors.New("room is full")
-	ErrBusy         = errors.New("room limit reached")
-	ErrRateLimited  = errors.New("room creation rate limited")
-	ErrSourceQuota  = errors.New("source room quota reached")
+	ErrNotFound      = errors.New("room not found")
+	ErrForbidden     = errors.New("invalid room invitation")
+	ErrUnauthorized  = errors.New("invalid or expired session")
+	ErrFull          = errors.New("room is full")
+	ErrBusy          = errors.New("room limit reached")
+	ErrRateLimited   = errors.New("room creation rate limited")
+	ErrSourceQuota   = errors.New("source room quota reached")
 	ErrInvalidSource = errors.New("invalid client source")
 )
 
@@ -88,14 +88,14 @@ type creationRecord struct {
 }
 
 type Store struct {
-	mu         sync.Mutex
-	rooms      map[string]*room
+	mu    sync.Mutex
+	rooms map[string]*room
 	// The ring-equivalent rolling slice holds at most maxCreationsPerWindow
 	// successful public room creations; there is no per-IP unbounded map.
 	recentCreates []creationRecord
-	now        func() time.Time
-	started    time.Time
-	clockEpoch string
+	now           func() time.Time
+	started       time.Time
+	clockEpoch    string
 }
 
 func NewStore() *Store {
