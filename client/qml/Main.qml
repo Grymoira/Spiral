@@ -141,7 +141,15 @@ ApplicationWindow {
         lastClockSampleMs = syncTools.monotonicMs()
         if (rtt < bestRttMs || clockSamples % 10 === 0) {
             bestRttMs = rtt
-            clockOffsetMs = offset
+            if (clockOffsetMs !== offset) {
+                clockOffsetMs = offset
+                // A new clock model changes the local deadline of an active event.
+                // Do not replay a timer that already finished.
+                var p = roomState.playback
+                if (clockReady && playbackTimer.running && p && p.pending &&
+                        scheduledKey === String(p.trackGeneration) + ":" + p.pending.id)
+                    armPending(p)
+            }
         }
         if (clockSamples >= 3 && !clockReady) {
             clockReady = true
@@ -213,10 +221,22 @@ ApplicationWindow {
             v += Math.max(0, syncTools.monotonicMs() + clockOffsetMs - Number(p.anchorServerMs))
         return Math.max(0, Math.min(Number(p.durationMs), v))
     }
+    // Keep the deadline in server time; convert to a local delay at each arm.
+    function armPending(p) {
+        playbackTimer.stop()
+        playbackTimer.interval = Math.max(1, Math.ceil(Number(p.pending.executeServerMs) -
+                                                     syncTools.monotonicMs() - clockOffsetMs))
+        playbackTimer.start()
+    }
     function executePending() {
         if (!authenticated || !clockReady || !sameRecording() || !mediaLoaded()) return
         var p = roomState.playback
         if (!p || !p.pending || scheduledKey !== String(p.trackGeneration) + ":" + p.pending.id) return
+        // Timer callbacks may be early after a clock correction or timer rounding.
+        if (syncTools.monotonicMs() + clockOffsetMs < Number(p.pending.executeServerMs)) {
+            armPending(p)
+            return
+        }
         // A lost Ready or stale snapshot must never start audible playback.
         if (p.pending.playState === "playing" && !ownReady()) return
         syncTools.logEvent("client.playback_executed")
@@ -236,10 +256,7 @@ ApplicationWindow {
             var key = String(p.trackGeneration) + ":" + p.pending.id
             if (scheduledKey !== key) {
                 scheduledKey = key
-                playbackTimer.stop()
-                playbackTimer.interval = Math.max(1, Math.floor(Number(p.pending.executeServerMs) -
-                                                       syncTools.monotonicMs() - clockOffsetMs))
-                playbackTimer.start()
+                armPending(p)
             }
             return
         }
@@ -323,6 +340,9 @@ ApplicationWindow {
                     window.bestRttMs = 1000000
                     window.clockEpoch = msg.state.clockEpoch
                     window.readySentKey = ""
+                    window.scheduledKey = ""
+                    playbackTimer.stop()
+                    player.pause()
                     window.probeClock()
                 }
                 if (!window.roomState.stateRevision || msg.state.stateRevision >= window.roomState.stateRevision) {
@@ -346,6 +366,8 @@ ApplicationWindow {
             window.clockReady = false
             window.clockSamples = 0
             window.bestRttMs = 1000000
+            window.scheduledKey = ""
+            playbackTimer.stop()
             player.pause()
             syncTools.logEventLevel("client.clock_expired", "WARN")
             window.logText = "Clock estimate expired; playback paused pending recalibration"
