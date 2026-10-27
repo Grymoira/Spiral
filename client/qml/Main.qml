@@ -281,9 +281,10 @@ ApplicationWindow {
         submitControl({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
         syncTools.logEvent("client.scheduled_command")
     }
-    // The server keeps only the latest canceled event in a room snapshot.
-    // Do not ACK before the matching timer has been removed and an
-    // authoritative paused timeline has stopped local audible playback.
+    // The server's latest cancellation is a cumulative revision watermark:
+    // acknowledging it means this client has reconciled ALL earlier retired
+    // appointments, not only the single event referenced by the tombstone.
+    // Never acknowledge while an obsolete local timer may still execute.
     function cancellationKey(state) {
         if (!state || !state.cancellation || !state.roomEpoch) return ""
         var c = state.cancellation
@@ -291,17 +292,25 @@ ApplicationWindow {
                 String(c.eventId) + ":" + String(c.stateRevision)
     }
     function applyCancellation(state) {
-        if (!state || !state.cancellation) return
+        if (!state || !state.cancellation || !state.playback) return
         var c = state.cancellation
         if (Number(c.stateRevision) > Number(state.stateRevision)) return
-        var key = String(c.trackGeneration) + ":" + String(c.eventId)
-        if (scheduledKey === key) {
+        // Snapshot reconciliation is cumulative: a rapid sequence of
+        // replacements can retire multiple events before we observe any of
+        // their individual notices. Keep only the pending event present in
+        // this latest authoritative state.
+        var live = state.playback.pending ?
+                String(state.playback.trackGeneration) + ":" +
+                String(state.playback.pending.id) : ""
+        if (scheduledKey !== "" && scheduledKey !== live) {
             playbackTimer.stop()
             scheduledKey = ""
         }
-        if (deferredPendingKey === key) deferredPendingKey = ""
-        if (armSentKey === key) armSentKey = ""
-        if (state.playback && state.playback.playState === "paused")
+        if (deferredPendingKey !== "" && deferredPendingKey !== live)
+            deferredPendingKey = ""
+        if (armSentKey !== "" && armSentKey !== live)
+            armSentKey = ""
+        if (state.playback.playState === "paused")
             player.pause()
     }
     function transmitCancellationReceipt() {
@@ -312,8 +321,14 @@ ApplicationWindow {
         if (Number(c.stateRevision) > Number(state.stateRevision)) return
         var key = cancellationKey(state)
         if (key === "" || cancellationAckConfirmedKey === key) return
-        var eventKey = String(c.trackGeneration) + ":" + String(c.eventId)
-        if (scheduledKey === eventKey) return
+        // Never claim the cumulative watermark while an older callback
+        // or deferred/ARM bookkeeping still belongs to another appointment.
+        var live = state.playback.pending ?
+                String(state.playback.trackGeneration) + ":" +
+                String(state.playback.pending.id) : ""
+        if (scheduledKey !== "" && scheduledKey !== live) return
+        if (deferredPendingKey !== "" && deferredPendingKey !== live) return
+        if (armSentKey !== "" && armSentKey !== live) return
         if (state.playback.playState === "paused" &&
                 player.playbackState === MediaPlayer.PlayingState) return
         var now = syncTools.monotonicMs()
@@ -609,7 +624,9 @@ ApplicationWindow {
                     window.pendingControl = null
                 }
                 syncTools.logEventLevel("client.room_error", "WARN")
-                window.logText = "Room error: " + msg.code
+                window.logText = msg.code === "cancellation_pending"
+                        ? "Waiting for room members to confirm previous cancellation"
+                        : "Room error: " + msg.code
             }
         }
     }
