@@ -15,7 +15,7 @@ function extract(name) {
     }
     throw Error("function never closes: " + name);
 }
-const code = ["acknowledgeArming", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
+const code = ["guardClockContinuity", "acknowledgeArming", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
     "executePending", "reconcile", "sameRecording", "mediaLoaded",
     "ownReady", "predictedPosition"].map(extract).join("\n");
 
@@ -41,7 +41,7 @@ function scene() {
             members:[{id:"guest", ready:true}]},
         player, playbackTimer:timer,
         MediaPlayer:{LoadedMedia:1, BufferedMedia:2, PlayingState:2},
-        syncTools:{monotonicMs:()=>clock.now, logEvent(){}}
+        syncTools:{monotonicMs:()=>clock.now, clockContinuityOk:()=>true, logEvent(){}}
     };
     vm.createContext(context);
     vm.runInContext(code, context, {filename:"client/qml/Main.qml"});
