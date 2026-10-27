@@ -86,3 +86,20 @@ Domain-specific validation (such as track identity, duration and permissions)
 still follows parsing and returns its existing operation error codes.
 
 **Compatibility note:** earlier client examples above illustrate payload contents; add the new required `operationId` and `expectedRevision` fields for `track` and `schedule` before sending. Legacy host controls are rejected as `invalid_message`.
+
+### Authenticated WebSocket heartbeat
+
+The server emits RFC 6455 Ping frames every 25 seconds. Following successful
+authentication, a valid masked client Ping or Pong counts as peer activity and
+refreshes the server's 75-second read-idle deadline even when no application
+JSON message is sent. Client-initiated Ping frames receive matching Pong
+replies. This does not extend the initial 8-second authentication deadline:
+pre-auth control frames cannot delay authentication timeout.
+
+To bound control-frame floods that bypass the ordinary text-message rate
+limit, each socket accepts at most 80 Ping/Pong frames per 10-second window;
+the budget persists across JSON text messages and also applies pre-auth.
+Malformed, non-final, oversized or unmasked frames are rejected under the
+existing strict WebSocket rules. Client protocols may use control frames for
+keepalive, but valid credentials, session TTL and authoritative access checks
+remain mandatory.

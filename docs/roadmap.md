@@ -57,3 +57,12 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Longer-lived sessions require explicit authenticated renewal and
       cross-process expiry event propagation if using more than one server
       instance; the current in-memory prototype remains single-process.
+
+## 2026-10-27: WebSocket heartbeat idle-timeout correction
+
+- [x] Refresh the authenticated 75-second idle deadline on valid Ping/Pong
+      rather than only on application text frames.
+- [x] Keep the pre-auth 8-second timeout unchanged and rate-limit control
+      frames independently, across application-text message boundaries.
+- [ ] Validate long-lived public WSS sessions and intermittent mobile
+      networks under actual network partition, packet loss and proxy behavior.

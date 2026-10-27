@@ -21,12 +21,23 @@ import (
 
 const maxMessage = 4096
 
+// Control frames are not counted by Hub's text-command budget because
+// readText consumes them internally. Bound them independently, including
+// before authentication, so a Ping/Pong flood cannot monopolize a socket.
+const controlWindow = 10 * time.Second
+const maxControlFramesPerWindow = 80
+
 var errClosed = errors.New("websocket closed")
 
 type socket struct {
 	net.Conn
 	reader *bufio.Reader
-	mu     sync.Mutex
+	mu     sync.Mutex // protects writes, not the single-reader counters
+
+	// Only readTextWithControl accesses these fields; socket input has
+	// exactly one reader, so no additional mutex is required.
+	controlWindowStart time.Time
+	controlFrames      int
 }
 
 func headerHas(value, expected string) bool {
@@ -95,7 +106,17 @@ func (s *socket) writeFrame(opcode byte, message []byte) error {
 	return err
 }
 
+// During the unauthenticated handshake, readText deliberately has no
+// activity callback: control traffic cannot refresh its eight-second limit.
 func (s *socket) readText() ([]byte, error) {
+	return s.readTextWithControl(nil)
+}
+
+// An authenticated reader can refresh its idle deadline after a valid,
+// rate-limited Ping or Pong. The callback runs in the sole read goroutine;
+// a failed deadline update terminates the connection rather than silently
+// disabling its idle timeout.
+func (s *socket) readTextWithControl(onControl func(opcode byte, payload []byte) error) ([]byte, error) {
 	for {
 		var h [2]byte
 		if _, err := io.ReadFull(s.reader, h[:]); err != nil {
@@ -136,6 +157,17 @@ func (s *socket) readText() ([]byte, error) {
 		for i := range data {
 			data[i] ^= mask[i%4]
 		}
+		if op == 0x9 || op == 0xa {
+			now := time.Now()
+			if s.controlWindowStart.IsZero() || !now.Before(s.controlWindowStart.Add(controlWindow)) {
+				s.controlWindowStart = now
+				s.controlFrames = 0
+			}
+			s.controlFrames++
+			if s.controlFrames > maxControlFramesPerWindow {
+				return nil, errors.New("websocket control frame rate limit")
+			}
+		}
 		switch op {
 		case 0x8:
 			_ = s.writeFrame(0x8, []byte{})
@@ -144,8 +176,18 @@ func (s *socket) readText() ([]byte, error) {
 			if err := s.writeFrame(0xa, data); err != nil {
 				return nil, err
 			}
+			if onControl != nil {
+				if err := onControl(op, data); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		case 0xa:
+			if onControl != nil {
+				if err := onControl(op, data); err != nil {
+					return nil, err
+				}
+			}
 			continue
 		case 0x1:
 			if !utf8.Valid(data) {

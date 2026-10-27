@@ -260,3 +260,24 @@ Tests use an injected, concurrency-safe clock for HTTP/WebSocket expiry,
 cover stale guest and host credentials, proactive sweeps, passive REST
 cleanup, and absence of duplicate revision bumps. Existing Go race and Qt
 CI remain release gates.
+
+## Authenticated WebSocket idle heartbeat correction — 2026-10-27
+
+Issue #30: previously, the 75-second authenticated read deadline was reset
+only on application text messages; `socket.readText` consumed RFC 6455
+Ping/Pong control frames inside its own loop without returning, causing valid
+control-only sessions to time out despite heartbeat responses. The
+authenticated read loop now provides an activity callback: **only valid,
+completely parsed** Ping/Pong frames reset that idle deadline. The initial
+8-second authentication deadline is unchanged; pre-auth control traffic
+cannot extend it.
+
+Because control frames bypass the Hub's text-message rate budget, the
+WebSocket parser now also enforces a separate per-socket maximum of 80
+Ping/Pong frames per rolling 10-second window, across text message
+boundaries, including before authentication. The existing 4KiB text bound,
+125-byte control-frame bound, masking/FIN rules and 25-second outgoing Ping
+schedule are preserved. Tests exercise deadline callbacks, authentication
+boundary, invalid frames, outbound Pong and control floods without a
+75-second wall-clock wait. This is a transport keepalive fix, not a
+guarantee of network connectivity or end-to-end audio synchronization.

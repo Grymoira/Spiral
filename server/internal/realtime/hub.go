@@ -83,6 +83,10 @@ func NewHub(s *rooms.Store) *Hub {
 const maxOpenWebSockets = 512
 const maxWebSocketsPerIP = 64
 
+// A correctly responding WebSocket peer must not expire merely because it
+// has no application text messages. Keep the initial auth timeout separate.
+const authenticatedIdleTimeout = 75 * time.Second
+
 func (h *Hub) acquireSocket(remote string) (func(), bool) {
 	ip, _, err := netSplitHostPort(remote)
 	if err != nil || ip == "" {
@@ -501,8 +505,12 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 	windowStart := time.Now()
 	count := 0
 	for {
-		_ = c.SetReadDeadline(time.Now().Add(75 * time.Second))
-		raw, err := c.readText()
+		_ = c.SetReadDeadline(time.Now().Add(authenticatedIdleTimeout))
+		raw, err := c.readTextWithControl(func(_ byte, _ []byte) error {
+			// readText consumes control frames without returning here. Only
+			// a fully parsed, rate-limited Ping or Pong refreshes the deadline.
+			return c.SetReadDeadline(time.Now().Add(authenticatedIdleTimeout))
+		})
 		if err != nil {
 			return
 		}
