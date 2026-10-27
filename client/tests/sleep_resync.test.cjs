@@ -122,12 +122,42 @@ function count(sent,type) {return sent.filter(m=>m.type===type).length;}
     state.playback.playState="paused";
     state.members[0].ready=false;
     const request=context.wakeSnapshotId;
-    assert.equal(context.acceptWakeSnapshot({operationId:request}),true);
+    assert.equal(context.acceptWakeSnapshot({operationId:request,state}),true);
     assert.equal(context.wakeSnapshotId,"");
     context.reconcile();
     assert.equal(mock.plays,0,"paused authoritative snapshot restarted audio");
     context.maybeReady();
     assert.equal(count(mock.sent,"ready"),2,"fresh snapshot did not allow readiness recovery");
+}
+
+// An authoritative reply that reports *already playing* must never lift the
+// wake fence. It may represent a COMMIT missed while the process was asleep.
+{
+    const {context,mock,player}=createScenario();
+    mock.failContinuity=true;
+    context.safeguardAuthority();
+    const id=context.wakeSnapshotId;
+    assert.ok(id);
+    const playing={
+        roomId:"room", roomEpoch:"room-epoch", stateRevision:13,
+        playback:{trackId:"b".repeat(64),trackGeneration:2,
+            playState:"playing",pending:null}
+    };
+    const before=count(mock.sent,"ready");
+    assert.equal(context.acceptWakeSnapshot({operationId:id,state:playing}),false);
+    assert.equal(context.wakeSnapshotId,id,"missed COMMIT released the wake gate");
+    assert.equal(count(mock.sent,"ready"),before+1);
+    const latest=mock.sent.filter(m=>m.type==="ready").at(-1);
+    assert.equal(latest.ready,false);
+    assert.equal(latest.trackGeneration,2,"revoke must use server's NEW generation");
+    assert.equal(player.playbackState,0);
+    context.clockReady=true;
+    context.lastAuthorityReplyMs=mock.now;
+    context.reconcile();
+    assert.equal(mock.plays,0);
+    const paused={...playing,playback:{...playing.playback,playState:"paused"}};
+    assert.equal(context.acceptWakeSnapshot({operationId:id,state:paused}),true);
+    assert.equal(context.wakeSnapshotId,"");
 }
 
 // A delayed old clock reply cannot recalibrate a resumed client before the
