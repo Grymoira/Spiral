@@ -23,7 +23,7 @@ function extractFunction(name) {
     throw new Error("unterminated production function: " + name);
 }
 const functions = [
-    "receiveClock", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
+    "guardClockContinuity", "receiveClock", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
     "acknowledgeArming", "executePending", "reconcile",
     "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extractFunction).join("\n");
@@ -60,6 +60,7 @@ function scenario() {
         MediaPlayer: {LoadedMedia: 1, BufferedMedia: 2, PlayingState: 2},
         syncTools: {
             monotonicMs: () => mock.now,
+            clockContinuityOk: () => true,
             logEvent: () => {}
         },
         maybeReady: () => {}
