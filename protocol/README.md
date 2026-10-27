@@ -201,3 +201,37 @@ delivery guarantee, durable receipt history, deterministic partition safety,
 or real-device output timing has been established. Old clients lacking this
 command will not produce receipts; coordinated upgrades are needed to use
 receipt diagnostics meaningfully. Issue #11 stays open.
+
+### Cancellation ACK playback barrier and cumulative watermark (Issue #11, phase 5)
+
+**Fail-closed admission:** While the room's current cancellation notice has
+unacknowledged members, the server rejects any new `play` or seek-while-playing
+control with `cancellation_pending`. It also refuses to replace an existing
+pending appointment directly with a playing-state command: such replacement
+would itself cancel a previous appointment without a receipt. These checks
+apply to both the WebSocket and the internal Store scheduling API. The final
+COMMIT deadline rechecks the cancellation barrier, and an unexpected failure
+retires the event rather than starting audio.
+
+A notice remains the **latest cumulative cancellation watermark** for the
+room: receiving its authoritative snapshot supersedes *all* local
+appointments not present as the current `playback.pending`. A client must
+discard every obsolete one-shot timer and ARM/deferred marker before it
+acknowledges the latest notice. When another safe pause/paused-state seek
+replaces a pending appointment before all prior receipts arrive, a newer
+watermark is issued and each surviving member must acknowledge it afresh.
+Older acknowledgements cannot clear a newer watermark. Existing live members
+that leave or expire are removed from the required-ACK set. Safe paused-state
+controls, readiness withdrawal and host room teardown are not blocked by the
+receipt barrier.
+
+**Availability and security tradeoff:** A member with a live session that
+never sends an ACK blocks further coordinated play. This is intentional:
+silently timing out the ACK into implicit approval would defeat fail-closed
+behavior. No administrator kick, timeout eviction, durable cancellation
+history, or receipt persistence across server restarts is implemented.
+Clients running older protocol versions will fail to acknowledge and can
+therefore block playback. The connection must be upgraded consistently across
+all members. A forged application ACK from an already authenticated client is
+not proof of acoustic silence. Physical output timing and network partition
+after COMMIT remain outside the demonstrated guarantee.
