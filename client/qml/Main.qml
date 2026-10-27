@@ -117,6 +117,30 @@ ApplicationWindow {
         controlFeedback = "Command rejected: " +
                           (reasons[msg.code] || "server rejected the operation")
     }
+    // Explain why a shared control is not yet usable. These are UI hints,
+    // not an alternative to the server's authoritative permission checks.
+    function hostControlHint() {
+        if (!roomId) return "Create or join a room to use shared playback controls."
+        if (!authenticated) return "Waiting for room authentication and connection."
+        if (memberRole !== "host") return "Only the room host can share or schedule playback."
+        if (pendingControl) return "Waiting for the previous coordinator acknowledgement."
+        if (!selectedHash) return "Select a local audio file to enable sharing and playback."
+        if (player.duration <= 0) return "Waiting for the selected recording to load its duration."
+        if (!clockReady) return "Calibrating the room clock; scheduled controls are unavailable."
+        if (!sameRecording()) return "Share the selected recording and wait for matching room metadata."
+        return "Host controls available; all room members must still be Ready before play is accepted."
+    }
+    // QMediaPlayer state is observable UI feedback, not evidence of sound output.
+    function localPlaybackStatus() {
+        if (mediaFaulted) return "Local player error: reselect the audio file to retry."
+        if (!selectedHash) return "Local player: no recording selected."
+        if (player.playbackState === MediaPlayer.PlayingState)
+            return "Local player reports Playing; audible output has not been verified."
+        if (player.playbackState === MediaPlayer.PausedState)
+            return "Local player reports Paused."
+        if (!mediaLoaded()) return "Local player is loading or the recording is unavailable."
+        return "Local player ready; playback is not running."
+    }
     function request(method, path, payload, done) {
         var base = syncTools.validatedServerBase(serverUrl)
         if (!base) { done(null, "Server address rejected: use HTTPS remotely or local loopback HTTP"); return }
@@ -1079,6 +1103,13 @@ ApplicationWindow {
                         Button { text:"Host: share track"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.shareTrack() }
                         Button { text:"Host: reload"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.reloadTrack() }
                     }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.hostControlHint()
+                    }
                     Label { Layout.fillWidth:true; color:window.secondary; wrapMode:Text.WrapAnywhere; text:"Room track SHA-256: " + (window.roomState.playback && window.roomState.playback.trackId ? window.roomState.playback.trackId : "not selected") }
                     Label { color:window.sameRecording() ? "#83d9ae" : window.secondary; text: window.sameRecording() ? "Local file matches room recording" : "Local file not yet matched" }
                     Slider { id:progress; Layout.fillWidth:true; from:0; to:Math.max(1,player.duration); value:player.position; enabled:player.seekable && !window.pendingControl
@@ -1089,7 +1120,21 @@ ApplicationWindow {
                         Item { Layout.fillWidth:true }
                         Button { text:"Play together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady && window.sameRecording(); onClicked:window.roomCommand("play",0) }
                         Button { text:"Pause together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady; onClicked:window.roomCommand("pause",0) }
-                        Button { text:"Local play"; enabled:window.roomId==="" && window.selectedHash!==""; onClicked:player.play() }
+                        Button {
+                            text: "Local play"
+                            enabled: window.roomId === "" && window.selectedHash !== ""
+                            onClicked: {
+                                window.logText = "Local playback requested; waiting for media backend state"
+                                player.play()
+                            }
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.localPlaybackStatus()
                     }
                     RowLayout {
                         Layout.fillWidth: true
