@@ -37,6 +37,11 @@ ApplicationWindow {
     property var pendingProbes: ({})
     property string readySentKey: ""
     property string scheduledKey: ""
+    property string deferredPendingKey: ""
+    property string finishedPendingKey: ""
+    // A late playing-state appointment must wait for the authoritative
+    // committed snapshot rather than starting from an expired local timer.
+    readonly property int maxLatePlayMs: 250
     property int lastCorrectionMs: -100000
     property bool userJoining: false
     property var pendingControl: null
@@ -87,6 +92,8 @@ ApplicationWindow {
         bestRttMs = 1000000
         clockEpoch = ""
         scheduledKey = ""
+        deferredPendingKey = ""
+        finishedPendingKey = ""
         readySentKey = ""
         roomState = ({})
         pendingControl = null
@@ -129,6 +136,9 @@ ApplicationWindow {
         memberToken = ""
         roomState = ({})
         pendingControl = null
+        scheduledKey = ""
+        deferredPendingKey = ""
+        finishedPendingKey = ""
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
         var base = syncTools.validatedServerBase(serverUrl)
@@ -263,40 +273,88 @@ ApplicationWindow {
                                                      syncTools.monotonicMs() - clockOffsetMs))
         playbackTimer.start()
     }
+    // Keep the readiness barrier on BOTH arming and firing the timer.
+    // On temporary media loss, resume only after a current authoritative
+    // snapshot again confirms this member is ready to play the same track.
+    function pendingUsable(p) {
+        return authenticated && clockReady && sameRecording() && mediaLoaded() &&
+                (p.pending.playState !== "playing" || ownReady())
+    }
+    function deferPending(key) {
+        if (scheduledKey !== "" || playbackTimer.running)
+            playbackTimer.stop()
+        scheduledKey = ""
+        if (deferredPendingKey !== key) {
+            deferredPendingKey = key
+            syncTools.logEvent("client.playback_deferred")
+        }
+    }
     function executePending() {
-        if (!authenticated || !clockReady || !sameRecording() || !mediaLoaded()) return
         var p = roomState.playback
-        if (!p || !p.pending || scheduledKey !== String(p.trackGeneration) + ":" + p.pending.id) return
-        // Timer callbacks may be early after a clock correction or timer rounding.
-        if (syncTools.monotonicMs() + clockOffsetMs < Number(p.pending.executeServerMs)) {
+        if (!p || !p.pending) return
+        var key = String(p.trackGeneration) + ":" + p.pending.id
+        // A stopped timer or a completed event must never execute again.
+        if (scheduledKey !== key || finishedPendingKey === key) return
+        if (!pendingUsable(p)) {
+            deferPending(key)
+            return
+        }
+        var serverNow = syncTools.monotonicMs() + clockOffsetMs
+        var lateness = serverNow - Number(p.pending.executeServerMs)
+        // Timer callbacks may be early after a clock correction or rounding.
+        if (lateness < 0) {
             armPending(p)
             return
         }
-        // A lost Ready or stale snapshot must never start audible playback.
-        if (p.pending.playState === "playing" && !ownReady()) return
+        // Starting audible playback well after the authoritative deadline
+        // would produce an unsynchronized late start. Stay paused and wait
+        // for the committed server snapshot to reconcile the current position.
+        if (p.pending.playState === "playing" && lateness > maxLatePlayMs) {
+            finishedPendingKey = key
+            scheduledKey = ""
+            deferredPendingKey = ""
+            player.pause()
+            syncTools.logEvent("client.playback_skipped")
+            return
+        }
+        finishedPendingKey = key
+        deferredPendingKey = ""
         syncTools.logEvent("client.playback_executed")
         if (p.pending.playState === "playing") {
             player.position = Math.min(Number(p.durationMs), Number(p.pending.mediaMs) +
-                    Math.max(0, syncTools.monotonicMs() + clockOffsetMs - Number(p.pending.executeServerMs)))
+                    Math.max(0, lateness))
             player.play()
         } else {
+            // Delayed pause is safer than free-running audio when the media
+            // finally becomes available, even if its deadline has passed.
             player.pause()
             player.position = Number(p.pending.mediaMs)
         }
     }
     function reconcile() {
-        if (!authenticated || !clockReady || !roomState.playback || !sameRecording() || !mediaLoaded()) return
+        if (!authenticated || !roomState.playback) return
         var p = roomState.playback
         if (p.pending) {
             var key = String(p.trackGeneration) + ":" + p.pending.id
+            if (finishedPendingKey === key) return
+            if (!pendingUsable(p)) {
+                deferPending(key)
+                return
+            }
             if (scheduledKey !== key) {
                 scheduledKey = key
+                deferredPendingKey = ""
                 armPending(p)
             }
             return
         }
+        // A cancellation, replacement without a pending event, or a commit
+        // clears all one-shot bookkeeping before normal timeline correction.
         playbackTimer.stop()
         scheduledKey = ""
+        deferredPendingKey = ""
+        finishedPendingKey = ""
+        if (!clockReady || !sameRecording() || !mediaLoaded()) return
         var position = predictedPosition(p)
         if (p.playState === "playing") {
             if (!ownReady()) {
@@ -379,6 +437,8 @@ ApplicationWindow {
                     window.clockEpoch = msg.state.clockEpoch
                     window.readySentKey = ""
                     window.scheduledKey = ""
+                    window.deferredPendingKey = ""
+                    window.finishedPendingKey = ""
                     playbackTimer.stop()
                     player.pause()
                     window.probeClock()

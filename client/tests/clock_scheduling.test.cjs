@@ -23,7 +23,8 @@ function extractFunction(name) {
     throw new Error("unterminated production function: " + name);
 }
 const functions = [
-    "receiveClock", "armPending", "executePending", "reconcile",
+    "receiveClock", "armPending", "pendingUsable", "deferPending",
+    "executePending", "reconcile",
     "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extractFunction).join("\n");
 
@@ -44,7 +45,8 @@ function scenario() {
         authenticated: true, clockReady: true, clockSamples: 3,
         clockOffsetMs: 0, bestRttMs: 1000000, lastClockSampleMs: 0,
         clockEpoch: "epoch", pendingProbes: {},
-        scheduledKey: "", selectedHash: hash, memberId: "owner",
+        scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "",
+        maxLatePlayMs: 250, selectedHash: hash, memberId: "owner",
         lastCorrectionMs: -100000, logText: "",
         roomState: {
             playback: {
