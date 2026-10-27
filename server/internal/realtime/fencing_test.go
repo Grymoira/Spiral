@@ -47,12 +47,12 @@ func TestSupersededConnectionCannotMutateRoom(t *testing.T) {
 	}
 
 	commands := []envelope{
-		{Type: "track", SHA256: strings.Repeat("b", 64), DurationMs: 10000},
+		{Type: "track", SHA256: strings.Repeat("b", 64), DurationMs: 10000, OperationID: "fence-track", ExpectedRevision: before.StateRevision},
 		{Type: "ready", TrackID: hash, TrackGeneration: 1, Ready: false},
-		{Type: "schedule", Action: "pause", MediaMs: 0},
+		{Type: "schedule", Action: "pause", MediaMs: 0, OperationID: "fence-pause", ExpectedRevision: before.StateRevision},
 	}
 	for _, cmd := range commands {
-		if _, err := h.applyCommand(old, cmd); !errors.Is(err, errSuperseded) {
+		if _, _, err := h.applyCommand(old, cmd); !errors.Is(err, errSuperseded) {
 			t.Fatalf("superseded %s command: expected fencing, got %v", cmd.Type, err)
 		}
 		after, err := store.Snapshot(host.RoomID, host.SessionToken)
@@ -66,7 +66,7 @@ func TestSupersededConnectionCannotMutateRoom(t *testing.T) {
 		}
 	}
 	// The replacement must retain authority.
-	if _, err := h.applyCommand(current, envelope{Type: "schedule", Action: "pause", MediaMs: 0}); err != nil {
+	if _, _, err := h.applyCommand(current, envelope{Type: "schedule", Action: "pause", MediaMs: 0, OperationID: "current-pause", ExpectedRevision: before.StateRevision}); err != nil {
 		t.Fatalf("replacement lost command authority: %v", err)
 	}
 }

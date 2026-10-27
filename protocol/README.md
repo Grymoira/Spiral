@@ -38,13 +38,14 @@ Client to server:
 {"type":"schedule","action":"seek","mediaMs":15000}
 ```
 
-`track` and `schedule` require host permissions. `ready` requires the exact current track hash and generation. `play` (including playing-state seek) is rejected until *every active member* reports ready. Readiness is advisory client state, not cryptographic proof of actual audio output. All file paths and media credentials stay on clients.
+Host `track` and `schedule` require `operationId` and `expectedRevision` (see below); they also require host permissions. `ready` requires the exact current track hash and generation. `play` (including playing-state seek) is rejected until *every active member* reports ready. Readiness is advisory client state, not cryptographic proof of actual audio output. All file paths and media credentials stay on clients.
 
 Server to client:
 
 - `auth_ok` — authenticated member ID, role, clock epoch.
 - `snapshot` — complete room membership and timeline state, including `roomEpoch`, `clockEpoch`, `stateRevision`, server monotonic time, SHA-256 track identity, `trackGeneration`, audio duration, playing/paused state, media/time anchors, and optional pending event.
 - `clock_reply` — echoed `probeId`, `c0`, and server receive/send monotonic timestamps `s1`, `s2`, with `clockEpoch`.
+- `command_ack` — acknowledgement of accepted host controls (`operationId`, `stateRevision`, `applied`).
 - `error` — machine-readable error code (`unauthorized`, `forbidden`, `not_ready`, `no_track`, `invalid_state`, `invalid_message`, `rate_limited`, etc.).
 
 Sample clock estimate: `offset_server_minus_client = ((s1-c0)+(s2-c3))/2`, `RTT=(c3-c0)-(s2-s1)`. A client measures `c0`/`c3` using its own monotonic timer. Estimate quality degrades when RTT is too high or the sample gets stale. Monotonic time in milliseconds is meaningful only inside the named clock epoch; it must not be compared to UTC timestamps or retained across server restarts.
@@ -83,3 +84,5 @@ Intentional scalar zero values retain their meaning: `ready:false`,
 `mediaMs:0`, and `c0:0` are accepted if the rest of the command is valid.
 Domain-specific validation (such as track identity, duration and permissions)
 still follows parsing and returns its existing operation error codes.
+
+**Compatibility note:** earlier client examples above illustrate payload contents; add the new required `operationId` and `expectedRevision` fields for `track` and `schedule` before sending. Legacy host controls are rejected as `invalid_message`.

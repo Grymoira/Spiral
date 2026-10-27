@@ -40,6 +40,10 @@ SyncTools::SyncTools(QObject *parent) : QObject(parent) {
 
 qint64 SyncTools::monotonicMs() const { return clock_.elapsed(); }
 
+QString SyncTools::newOperationId() const {
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
 QString SyncTools::validatedServerBase(const QString &input) const {
     return SpiralTransport::baseUrl(input);
 }

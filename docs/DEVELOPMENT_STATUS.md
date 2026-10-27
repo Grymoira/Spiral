@@ -203,3 +203,16 @@ Regression tests enumerate missing/null for every required field, malformed
 types, unexpected/duplicated fields and valid zero values. A real two-way
 WebSocket test verifies rejected packets return `invalid_message` without
 changing state revision, readiness or pending playback.
+
+## Host control idempotency and optimistic revisions — 2026-10-27
+
+Issue #19: duplicate share of identical SHA-256/duration becomes a no-op;
+forced reload requires an explicit `reload:true`. Host `track` and
+`schedule` WebSocket commands require an operation ID and authoritative
+expected revision. Server-side atomic bounded deduplication (64 accepted IDs
+per room) prevents retried commands from allocating new events or resetting
+readiness. Reused IDs with different payloads and stale new intents return
+conflict errors. The Qt client serializes controls pending command_ack and
+retries in-flight IDs on reconnect. This changes the host control wire
+contract; incompatible older clients must upgrade. No audio relay or acoustic
+accuracy work is implied.

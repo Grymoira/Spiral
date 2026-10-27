@@ -79,6 +79,8 @@ type room struct {
 	epoch     string
 	nextEvent uint64
 	playback  Playback
+	operations map[string]controlReceipt
+	operationOrder []string
 	members   map[string]membership // Key is an unpredictable session token.
 }
 

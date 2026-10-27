@@ -24,6 +24,8 @@ import (
 type testConn struct {
 	net.Conn
 	rd *bufio.Reader
+	revision uint64
+	commandSequence uint64
 }
 
 func connect(t *testing.T, addr string) *testConn {
@@ -51,6 +53,17 @@ func negotiate(t *testing.T, conn net.Conn, addr string) *testConn {
 }
 func (c *testConn) send(t *testing.T, msg any) {
 	t.Helper()
+	if command, ok := msg.(map[string]any); ok {
+		if command["type"] == "track" || command["type"] == "schedule" {
+			c.commandSequence++
+			if _, present := command["operationId"]; !present {
+				command["operationId"] = fmt.Sprintf("test-command-%d", c.commandSequence)
+			}
+			if _, present := command["expectedRevision"]; !present {
+				command["expectedRevision"] = c.revision
+			}
+		}
+	}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +119,13 @@ func (c *testConn) recv(t *testing.T) map[string]any {
 		var m map[string]any
 		if err := json.Unmarshal(payload, &m); err != nil {
 			t.Fatal(err)
+		}
+		if m["type"] == "snapshot" {
+			if s, ok := m["state"].(map[string]any); ok {
+				if revision, ok := s["stateRevision"].(float64); ok {
+					c.revision = uint64(revision)
+				}
+			}
 		}
 		return m
 	}
