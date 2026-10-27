@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func preparedRoom(t *testing.T) (*Store, Credentials, Credentials, string) {
@@ -239,4 +240,123 @@ func TestLateJoinAndDepartureFreezeAlreadyPlayingRoom(t *testing.T) {
 			t.Fatalf("guest departure did not freeze room: %+v", after.Playback)
 		}
 	})
+}
+
+func committedPlayForMemberLoss(t *testing.T, s *Store, host, guest Credentials, hash, operationID string) uint64 {
+	t.Helper()
+	before, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arming, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0, operationID, before.StateRevision)
+	if err != nil || !applied || arming.Playback.Pending == nil || arming.Playback.Pending.Phase != "arming" {
+		t.Fatalf("schedule: %+v applied=%v err=%v", arming, applied, err)
+	}
+	id := arming.Playback.Pending.ID
+	if _, committed, err := s.AcknowledgeArming(host.RoomID, host.SessionToken, hash,
+		arming.Playback.TrackGeneration, id); err != nil || committed {
+		t.Fatalf("host ACK: committed=%v err=%v", committed, err)
+	}
+	confirmed, committed, err := s.AcknowledgeArming(host.RoomID, guest.SessionToken, hash,
+		arming.Playback.TrackGeneration, id)
+	if err != nil || !committed || confirmed.Playback.Pending == nil ||
+		confirmed.Playback.Pending.Phase != "committed" {
+		t.Fatalf("guest ACK: %+v committed=%v err=%v", confirmed, committed, err)
+	}
+	return id
+}
+
+func TestMemberLossFencesPreviouslyCommittedPlayingEvent(t *testing.T) {
+	cases := []struct {
+		name   string
+		remove func(*testing.T, *Store, Credentials, Credentials)
+	}{
+		{"leave", func(t *testing.T, s *Store, host, guest Credentials) {
+			if err := s.Leave(host.RoomID, guest.SessionToken); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"expire", func(t *testing.T, s *Store, host, guest Credentials) {
+			s.mu.Lock()
+			r := s.rooms[host.RoomID]
+			m := r.members[guest.SessionToken]
+			m.expiresAt = s.now().Add(-time.Millisecond)
+			r.members[guest.SessionToken] = m
+			s.mu.Unlock()
+			s.SweepExpired()
+		}},
+		{"join", func(t *testing.T, s *Store, host, guest Credentials) {
+			if _, err := s.Join(host.RoomID, host.InviteCode); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s, host, guest, hash := preparedRoom(t)
+			id := committedPlayForMemberLoss(t, s, host, guest, hash, "member-loss-"+tc.name)
+			tc.remove(t, s, host, guest)
+			after, err := s.Snapshot(host.RoomID, host.SessionToken)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if after.Playback.Pending != nil || after.Playback.PlayState != "paused" {
+				t.Fatalf("membership mutation left executable playback: %+v", after.Playback)
+			}
+			if _, committed := s.CommitEvent(host.RoomID, id); committed {
+				t.Fatal("old play committed after membership mutation")
+			}
+		})
+	}
+}
+
+func TestForcedPauseCancelsObsoleteFuturePauseButPreservesPausedSeek(t *testing.T) {
+	s, host, guest, hash := preparedRoom(t)
+	s.mu.Lock()
+	r := s.rooms[host.RoomID]
+	r.playback.PlayState = "playing"
+	r.playback.AnchorMediaMs = 1000
+	r.playback.AnchorServerMs = s.ServerMs() - 1000
+	r.revision++
+	s.mu.Unlock()
+	before, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	future, _, err := s.ControlSchedule(host.RoomID, host.SessionToken, "pause", 0,
+		"forced-pause-test", before.StateRevision)
+	if err != nil || future.Playback.Pending == nil {
+		t.Fatalf("schedule pause: %+v %v", future, err)
+	}
+	old := *future.Playback.Pending
+	stopped, err := s.SetReady(host.RoomID, guest.SessionToken, hash, future.Playback.TrackGeneration, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Playback.PlayState != "paused" || stopped.Playback.Pending != nil {
+		t.Fatalf("forced pause retained future pause: %+v", stopped.Playback)
+	}
+	if stopped.Playback.AnchorMediaMs >= old.MediaMs {
+		t.Fatalf("paused media jumped to future target: stopped=%d projected=%d",
+			stopped.Playback.AnchorMediaMs, old.MediaMs)
+	}
+	if _, committed := s.CommitEvent(host.RoomID, old.ID); committed {
+		t.Fatal("obsolete pause was committed")
+	}
+	if _, err := s.SetReady(host.RoomID, guest.SessionToken, hash, future.Playback.TrackGeneration, true); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seek, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "seek", 1500,
+		"safe-paused-seek", current.StateRevision)
+	if err != nil || !applied || seek.Playback.Pending == nil {
+		t.Fatalf("schedule paused seek: %+v %v", seek, err)
+	}
+	preserved, err := s.SetReady(host.RoomID, guest.SessionToken, hash, future.Playback.TrackGeneration, false)
+	if err != nil || preserved.Playback.Pending == nil || preserved.Playback.Pending.ID != seek.Playback.Pending.ID {
+		t.Fatalf("legitimate paused seek was canceled: %+v %v", preserved.Playback, err)
+	}
 }
