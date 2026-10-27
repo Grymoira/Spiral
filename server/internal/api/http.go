@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -54,7 +55,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_json")
 			return
 		}
-		creds, err := h.Store.Create()
+		// Use the peer address assigned by net/http, never user-provided
+		// Forwarded headers (which are spoofable without a trusted proxy).
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_client_address")
+			return
+		}
+		creds, err := h.Store.CreateForSource(host)
 		if err != nil {
 			writeRoomError(w, err)
 			return
@@ -213,6 +221,13 @@ func writeRoomError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
 	case errors.Is(err, rooms.ErrBusy):
 		writeError(w, http.StatusServiceUnavailable, "room_limit_reached")
+	case errors.Is(err, rooms.ErrRateLimited):
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "room_creation_rate_limited")
+	case errors.Is(err, rooms.ErrSourceQuota):
+		writeError(w, http.StatusTooManyRequests, "source_room_limit_reached")
+	case errors.Is(err, rooms.ErrInvalidSource):
+		writeError(w, http.StatusBadRequest, "invalid_client_address")
 	case errors.Is(err, rooms.ErrFull):
 		writeError(w, http.StatusConflict, "room_full")
 	default:

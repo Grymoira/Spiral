@@ -7,6 +7,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"errors"
+	"net/netip"
 	"sync"
 	"time"
 )
@@ -15,6 +16,17 @@ const (
 	MaxMembers      = 5
 	MaxRooms        = 1024 // Bound memory while rooms are ephemeral.
 	sessionLifetime = 24 * time.Hour
+
+	// New, never-used rooms expire quickly so anonymous reservations cannot
+	// hold the room budget for the full 24-hour session lifetime.
+	unclaimedRoomLifetime = 15 * time.Minute
+
+	// Accepted public API creations are bounded in one rolling minute. The
+	// fixed global window also bounds the per-source rate-accounting memory.
+	creationWindow           = time.Minute
+	maxCreationsPerWindow    = 48
+	maxCreationsPerSource    = 6
+	maxActiveRoomsPerSource  = 24
 )
 
 var (
@@ -23,6 +35,9 @@ var (
 	ErrUnauthorized = errors.New("invalid or expired session")
 	ErrFull         = errors.New("room is full")
 	ErrBusy         = errors.New("room limit reached")
+	ErrRateLimited  = errors.New("room creation rate limited")
+	ErrSourceQuota  = errors.New("source room quota reached")
+	ErrInvalidSource = errors.New("invalid client source")
 )
 
 type Member struct {
@@ -57,6 +72,9 @@ type membership struct {
 type room struct {
 	id        string
 	invite    string
+	source    string
+	createdAt time.Time
+	claimed   bool
 	revision  uint64
 	epoch     string
 	nextEvent uint64
@@ -64,9 +82,17 @@ type room struct {
 	members   map[string]membership // Key is an unpredictable session token.
 }
 
+type creationRecord struct {
+	source string
+	at     time.Time
+}
+
 type Store struct {
 	mu         sync.Mutex
 	rooms      map[string]*room
+	// The ring-equivalent rolling slice holds at most maxCreationsPerWindow
+	// successful public room creations; there is no per-IP unbounded map.
+	recentCreates []creationRecord
 	now        func() time.Time
 	started    time.Time
 	clockEpoch string
@@ -88,7 +114,66 @@ func randomToken(n int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// Create is retained for internal test/embedding use. Public HTTP creation must
+// use CreateForSource so requests cannot bypass admission limits.
 func (s *Store) Create() (Credentials, error) {
+	return s.create("", false)
+}
+
+// CreateForSource enforces bounded public admission on the actual peer IP.
+// It must not receive an untrusted Forwarded/X-Forwarded-For header value.
+func (s *Store) CreateForSource(rawIP string) (Credentials, error) {
+	ip, err := netip.ParseAddr(rawIP)
+	if err != nil {
+		return Credentials{}, ErrInvalidSource
+	}
+	return s.create(ip.Unmap().WithZone("").String(), true)
+}
+
+func (s *Store) create(source string, limited bool) (Credentials, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+
+	// Always reclaim stale rooms before checking either global or source
+	// capacity. No background cleanup goroutine or indefinite room reservation.
+	for _, old := range s.rooms {
+		s.purgeExpired(old)
+	}
+	if len(s.rooms) >= MaxRooms {
+		return Credentials{}, ErrBusy
+	}
+	if limited {
+		active := 0
+		for _, r := range s.rooms {
+			if r.source == source {
+				active++
+			}
+		}
+		if active >= maxActiveRoomsPerSource {
+			return Credentials{}, ErrSourceQuota
+		}
+
+		// Expired entries are discarded atomically with rate accounting.
+		recent := s.recentCreates[:0]
+		perSource := 0
+		for _, event := range s.recentCreates {
+			if now.Sub(event.at) >= creationWindow {
+				continue
+			}
+			recent = append(recent, event)
+			if event.source == source {
+				perSource++
+			}
+		}
+		s.recentCreates = recent
+		if len(recent) >= maxCreationsPerWindow || perSource >= maxCreationsPerSource {
+			return Credentials{}, ErrRateLimited
+		}
+	}
+
+	// Generate secrets only for admitted attempts. Keep insertion and quota
+	// accounting under Store.mu so simultaneous requests cannot overbook.
 	id, err := randomToken(16)
 	if err != nil {
 		return Credentials{}, err
@@ -105,30 +190,29 @@ func (s *Store) Create() (Credentials, error) {
 	if err != nil {
 		return Credentials{}, err
 	}
-	expires := s.now().Add(sessionLifetime)
-	r := &room{id: id, epoch: id, invite: invite, revision: 1, playback: Playback{PlayState: "paused"}, members: map[string]membership{
-		token: {member: Member{ID: memberID, Role: "host"}, expiresAt: expires},
-	}}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	// Reap expired hosts when creating new rooms so abandoned rooms cannot
-	// accumulate without bound. No goroutine or unbounded background queue.
-	for _, old := range s.rooms {
-		s.purgeExpired(old)
-	}
-	if len(s.rooms) >= MaxRooms {
-		return Credentials{}, ErrBusy
-	}
-	// Collision-resistant IDs are still checked rather than assumed unique.
 	if _, exists := s.rooms[id]; exists {
 		return Credentials{}, errors.New("room identifier collision")
 	}
+	expires := now.Add(sessionLifetime)
+	r := &room{id: id, epoch: id, invite: invite, source: source,
+		createdAt: now, revision: 1, playback: Playback{PlayState: "paused"},
+		members: map[string]membership{
+			token: {member: Member{ID: memberID, Role: "host"}, expiresAt: expires},
+		},
+	}
 	s.rooms[id] = r
+	if limited {
+		s.recentCreates = append(s.recentCreates, creationRecord{source: source, at: now})
+	}
 	return Credentials{RoomID: id, MemberID: memberID, SessionToken: token, SessionExpiresAt: expires, InviteCode: invite}, nil
 }
 
 // purgeExpired must be called while holding s.mu. An expired host destroys the room.
 func (s *Store) purgeExpired(r *room) bool {
+	if !r.claimed && !s.now().Before(r.createdAt.Add(unclaimedRoomLifetime)) {
+		delete(s.rooms, r.id)
+		return false
+	}
 	for token, m := range r.members {
 		if !s.now().Before(m.expiresAt) {
 			if m.member.Role == "host" {
@@ -168,6 +252,7 @@ func (s *Store) Join(roomID, invite string) (Credentials, error) {
 	}
 	expires := s.now().Add(sessionLifetime)
 	r.members[token] = membership{member: Member{ID: memberID, Role: "member"}, expiresAt: expires}
+	r.claimed = true
 	// A newly joined member is not ready: cancel an in-flight play event.
 	s.cancelUnreadyPlaybackLocked(r)
 	r.revision++
@@ -187,6 +272,7 @@ func (s *Store) Snapshot(roomID, token string) (Snapshot, error) {
 	if _, ok := r.members[token]; !ok {
 		return Snapshot{}, ErrUnauthorized
 	}
+	r.claimed = true
 	return s.snapshot(r), nil
 }
 
