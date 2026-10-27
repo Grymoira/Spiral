@@ -46,6 +46,7 @@ function scenario() {
         clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000, bestRttMs: 1000000, lastClockSampleMs: 0,
         clockEpoch: "epoch", pendingProbes: {},
         scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
+        wakeSnapshotId: "", wakeSnapshotLastSentMs: -1,
         maxLatePlayMs: 250, selectedHash: hash, memberId: "owner",
         lastCorrectionMs: -100000, logText: "",
         roomState: {
