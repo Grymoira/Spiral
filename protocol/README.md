@@ -103,3 +103,32 @@ Malformed, non-final, oversized or unmasked frames are rejected under the
 existing strict WebSocket rules. Client protocols may use control frames for
 keepalive, but valid credentials, session TTL and authoritative access checks
 remain mandatory.
+
+### Playing-state ARM / ACK / COMMIT (Issue #11, partial protocol)
+
+All authenticated WebSocket `schedule` controls that would enter a
+**playing** state (play, or seek while already playing) initially publish a
+pending event with `phase:"arming"` and an `armExpiresServerMs` deadline
+approximately 5 seconds in the future. These events have
+`executeServerMs:0` and are **not executable**.
+
+Each currently authorized, Ready member with the same locally loaded
+recording and a calibrated clock must send:
+`{"type":"arm_ack","trackId":"<sha256>","trackGeneration":1,"eventId":7}`.
+Only the event's exact current room membership, track generation, ID,
+and Ready status are accepted. Each member is counted once; duplicate ACKs
+do not advance the barrier. When all current members have ACKed, the server
+releases `phase:"committed"` with a newly allocated shared execution
+deadline at least 2.5 seconds in the future. A pending ARM without every
+ACK is canceled after 5 seconds, without starting playback. Obsolete
+revisions, readiness revocation and new members can cancel an ARM.
+
+Pause and seek while paused continue using direct `phase:"committed"`
+scheduling; they do not initiate audible playback. Clients MUST refuse
+local playback from an `arming` event and MUST upgrade together with the
+server for this protocol version.
+
+ACK means **application prepared to schedule**, not physical audio-start
+confirmation. Delivery failure after COMMIT, network partitions and audio
+output latency are still outside proven correctness. Issue #11 remains open
+pending physical two-device capture and P50/P95/max measurements.

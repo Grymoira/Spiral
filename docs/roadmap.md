@@ -66,3 +66,15 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       frames independently, across application-text message boundaries.
 - [ ] Validate long-lived public WSS sessions and intermittent mobile
       networks under actual network partition, packet loss and proxy behavior.
+
+## Issue #11: incremental ARM/ACK/COMMIT safety gate
+
+- [x] Require event-scoped per-member ACKs for authenticated WebSocket
+      playing-state schedules before any executable deadline is published.
+- [x] Fail closed when an ARM expires unacknowledged, reject stale IDs and
+      fence phase/deadline timer races.
+- [x] Send Qt arming ACK only with local track, media, Ready and clock checks,
+      and refuse to execute an uncommitted pending event.
+- [ ] Verify real Qt Multimedia state transitions, explicit CANCEL ACK,
+      network partitions after COMMIT, OS suspend/reconnect and two-device
+      recorded acoustic onset differences. Issue #11 remains OPEN.
