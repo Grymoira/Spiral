@@ -22,6 +22,7 @@ const QSet<QString> &approvedEvents() {
         QStringLiteral("client.file_selected"), QStringLiteral("client.file_rejected"),
         QStringLiteral("client.media_error"), QStringLiteral("client.room_created"),
         QStringLiteral("client.room_joined"), QStringLiteral("client.room_left"),
+        QStringLiteral("client.member_removed"),
         QStringLiteral("client.websocket_open"), QStringLiteral("client.websocket_closed"),
         QStringLiteral("client.authenticated"), QStringLiteral("client.clock_calibrated"),
         QStringLiteral("client.clock_expired"), QStringLiteral("client.track_shared"),

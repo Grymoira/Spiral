@@ -485,3 +485,24 @@ a coordinator that never responds, and is not proof of synchronized sound.
 CI outcomes must be checked against the exact PR head and merged main,
 not inferred. Physical two-device audio, literal suspend/network impairment,
 and predeclared P50/P95/max acceptance remain unverified. Keep #11 OPEN.
+
+## Issue #11 phase 9 — explicit host recovery from stuck cancellation ACK (2026-10-27)
+
+Following phase 8 baseline main `3988d0a996ed0031e21d80991ef97bfe012a6aaf`,
+introduce an explicit host-only manual guest removal action in the Go Store,
+authenticated REST endpoint and Qt member list UI. A missing cancellation
+receipt continues to block play **until** all living members acknowledge or
+the host deliberately revokes the nonresponsive guest. Membership removal
+suspends current play, revokes queued COMMIT, and removes only the departed
+member's outstanding cancellation requirement. The host must start a **new**
+ARM/ACK/COMMIT; revocation never counts a forged receipt.
+
+Automated Store/API/QML/logging regressions cover authorization, self-target
+rejection, revoked credentials, stale COMMIT fencing, loss of the missing-ACK
+barrier after deliberate removal, token privacy and canonical route logging.
+CI validation is pending until exact PR head and merged main workflows pass.
+
+**Evidence boundary:** host removal cannot guarantee the physically isolated
+guest has stopped its loudspeaker. Actual fail-closed disconnection capture,
+OS/network failure injection, thresholds and dual-device P50/P95/max remain
+mandatory before Issue #11 can be closed.

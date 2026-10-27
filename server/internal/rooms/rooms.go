@@ -40,6 +40,9 @@ var (
 	ErrInvalidSource = errors.New("invalid client source")
 )
 
+var ErrHostOnly = errors.New("host permission required")
+var ErrMemberNotFound = errors.New("target member not found")
+
 type Member struct {
 	ID    string `json:"id"`
 	Role  string `json:"role"`
@@ -386,4 +389,39 @@ func (s *Store) Leave(roomID, token string) error {
 	s.forgetCancellationMemberLocked(r, member.member.ID)
 	r.revision++
 	return nil
+}
+
+// RemoveGuest is an explicit host-only recovery action for a member who no
+// longer acknowledges playback cancellations. It does NOT infer consent from
+// a missing ACK, automatically expel slow clients, or attest acoustic silence.
+// Session revocation and playback suspension happen under the same Store lock.
+func (s *Store) RemoveGuest(roomID, hostToken, targetMemberID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, caller, err := s.authorized(roomID, hostToken)
+	if err != nil {
+		return err
+	}
+	if caller.member.Role != "host" {
+		return ErrHostOnly
+	}
+	if targetMemberID == "" || targetMemberID == caller.member.ID {
+		return ErrInvalidState
+	}
+	for token, member := range r.members {
+		if member.member.ID != targetMemberID {
+			continue
+		}
+		if member.member.Role != "member" {
+			return ErrInvalidState
+		}
+		// Suspend before excluding the participant from readiness and the
+		// outstanding cancellation receipt set. Any pending play is retired.
+		s.suspendPlaybackLocked(r)
+		delete(r.members, token)
+		s.forgetCancellationMemberLocked(r, targetMemberID)
+		r.revision++
+		return nil
+	}
+	return ErrMemberNotFound
 }

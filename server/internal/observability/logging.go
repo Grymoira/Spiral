@@ -104,8 +104,13 @@ func routeName(path string) string {
 	if len(parts) == 2 && parts[0] != "" && parts[1] == "join" {
 		return "rooms.join"
 	}
-	if len(parts) == 3 && parts[0] != "" && parts[1] == "members" && parts[2] == "me" {
-		return "rooms.leave"
+	if len(parts) == 3 && parts[0] != "" && parts[1] == "members" {
+		if parts[2] == "me" {
+			return "rooms.leave"
+		}
+		if parts[2] != "" {
+			return "rooms.member_remove" // Never log the member identifier.
+		}
 	}
 	return "unknown"
 }

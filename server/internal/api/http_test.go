@@ -170,3 +170,55 @@ func TestJSONSecurityHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestHostOnlyGuestRemovalViaHTTP(t *testing.T) {
+	store := rooms.NewStore()
+	h := NewHandler(store)
+	created := request(t, h, "POST", "/v1/rooms", "{}", "")
+	if created.Code != 201 {
+		t.Fatalf("create: %d", created.Code)
+	}
+	var host rooms.Credentials
+	if err := json.NewDecoder(created.Body).Decode(&host); err != nil {
+		t.Fatal(err)
+	}
+	joined := request(t, h, "POST", "/v1/rooms/"+host.RoomID+"/join",
+		`{"inviteCode":"`+host.InviteCode+`"}`, "")
+	if joined.Code != 201 {
+		t.Fatalf("join: %d", joined.Code)
+	}
+	var guest rooms.Credentials
+	if err := json.NewDecoder(joined.Body).Decode(&guest); err != nil {
+		t.Fatal(err)
+	}
+	url := "/v1/rooms/" + host.RoomID + "/members/" + guest.MemberID
+	for _, tc := range []struct {
+		method, token string
+		want          int
+	}{
+		{"GET", host.SessionToken, 405},
+		{"DELETE", "", 401},
+		{"DELETE", guest.SessionToken, 403},
+	} {
+		response := request(t, h, tc.method, url, "", tc.token)
+		if response.Code != tc.want {
+			t.Errorf("%s with token status %d, want %d: %s",
+				tc.method, response.Code, tc.want, response.Body.String())
+		}
+	}
+	own := request(t, h, "DELETE", "/v1/rooms/"+host.RoomID+"/members/"+host.MemberID,
+		"", host.SessionToken)
+	if own.Code != 400 {
+		t.Fatalf("host should not remove itself: %d", own.Code)
+	}
+	removed := request(t, h, "DELETE", url, "", host.SessionToken)
+	if removed.Code != 204 || removed.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("host removal failed: %d", removed.Code)
+	}
+	if response := request(t, h, "GET", "/v1/rooms/"+host.RoomID, "", guest.SessionToken); response.Code != 401 {
+		t.Fatalf("revoked guest can still read room: %d", response.Code)
+	}
+	if response := request(t, h, "DELETE", url, "", host.SessionToken); response.Code != 404 {
+		t.Fatalf("second removal should be not found: %d", response.Code)
+	}
+}

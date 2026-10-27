@@ -130,6 +130,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
 		return
 	}
+	if len(parts) == 3 && parts[1] == "members" && parts[2] != "" {
+		if r.Method != http.MethodDelete {
+			w.Header().Set("Allow", "DELETE")
+			writeError(w, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		if err := h.Store.RemoveGuest(roomID, bearer(r), parts[2]); err != nil {
+			writeRoomError(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		h.Hub.Broadcast(roomID) // Closes the revoked member's authenticated socket.
+		return
+	}
 	writeError(w, http.StatusNotFound, "not_found")
 }
 
@@ -219,6 +233,12 @@ func writeRoomError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, "invalid_invite")
 	case errors.Is(err, rooms.ErrUnauthorized):
 		writeError(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, rooms.ErrHostOnly):
+		writeError(w, http.StatusForbidden, "host_only")
+	case errors.Is(err, rooms.ErrMemberNotFound):
+		writeError(w, http.StatusNotFound, "member_not_found")
+	case errors.Is(err, rooms.ErrInvalidState):
+		writeError(w, http.StatusBadRequest, "invalid_state")
 	case errors.Is(err, rooms.ErrBusy):
 		writeError(w, http.StatusServiceUnavailable, "room_limit_reached")
 	case errors.Is(err, rooms.ErrRateLimited):

@@ -149,6 +149,33 @@ ApplicationWindow {
             connectRoom(body)
         })
     }
+    // Host-controlled fail-closed recovery for a member that cannot ACK a
+    // cancellation. Server authorization is authoritative; the target's old
+    // socket is revoked, and the room is paused before a fresh ARM is possible.
+    function removeGuest(targetId) {
+        if (!authenticated || memberRole !== "host" || !roomId ||
+                !targetId || targetId === memberId) return
+        var base = syncTools.validatedServerBase(serverUrl)
+        if (!base) { logText = "Server address rejected"; return }
+        var originalRoom = roomId
+        var token = memberToken
+        var req = new XMLHttpRequest()
+        req.onreadystatechange = function() {
+            if (req.readyState !== XMLHttpRequest.DONE ||
+                    roomId !== originalRoom || memberToken !== token) return
+            if (req.status === 204) {
+                syncTools.logEvent("client.member_removed")
+                logText = "Member removed. Playback remains paused until every remaining member is Ready"
+            } else {
+                syncTools.logEventLevel("client.room_error", "WARN")
+                logText = "Unable to remove member (HTTP " + req.status + ")"
+            }
+        }
+        req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) +
+                 "/members/" + encodeURIComponent(targetId))
+        req.setRequestHeader("Authorization", "Bearer " + token)
+        req.send()
+    }
     function leaveRoom() {
         var originalRoom = roomId
         var token = memberToken
@@ -856,7 +883,15 @@ ApplicationWindow {
                         text:window.inviteCode ? "Share invitation code securely: " + window.inviteCode : "Invitation is shown to host only" }
                     Label { color:window.secondary; text:"Members: " + (window.roomState.members ? window.roomState.members.length : 0) + "/5 · Clock: " + (window.clockReady ? "ready (RTT " + Math.round(window.bestRttMs) + " ms)" : "calibrating") }
                     Repeater { model:window.roomState.members || []
-                        delegate: Label { color:window.secondary; text:modelData.role + " · " + modelData.id.substring(0,10) + " · " + (modelData.ready ? "Ready" : "Not ready") }
+                        delegate: RowLayout {
+                            Label { color:window.secondary; text:modelData.role + " · " + modelData.id.substring(0,10) + " · " + (modelData.ready ? "Ready" : "Not ready") }
+                            Button {
+                                text:"Remove member"
+                                visible: window.memberRole === "host" && modelData.role !== "host"
+                                enabled: window.authenticated
+                                onClicked:window.removeGuest(modelData.id)
+                            }
+                        }
                     }
                 }
             }
