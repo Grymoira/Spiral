@@ -35,6 +35,7 @@ function scenario() {
         lastAuthorityReplyMs: 900, authorityStaleAfterMs: 2500,
         clockEpoch: "epoch", pendingProbes: {}, scheduledKey: "", armSentKey:"",
         deferredPendingKey:"", finishedPendingKey:"", readySentKey:hash+":1",
+        wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
         maxLatePlayMs:250, lastCorrectionMs:-100000,
         selectedHash:hash, memberId:"owner",
         roomState:{playback:{trackId:hash,trackGeneration:1,durationMs:10000,
