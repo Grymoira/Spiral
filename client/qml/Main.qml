@@ -43,6 +43,10 @@ ApplicationWindow {
     property string deferredPendingKey: ""
     property string finishedPendingKey: ""
     property string armSentKey: ""
+    // Cancellation acknowledgements are client claims, not acoustic proof.
+    property string cancellationAckKey: ""
+    property string cancellationAckConfirmedKey: ""
+    property real cancellationAckLastSentMs: -1
     // A late playing-state appointment must wait for the authoritative
     // committed snapshot rather than starting from an expired local timer.
     readonly property int maxLatePlayMs: 250
@@ -100,6 +104,9 @@ ApplicationWindow {
         deferredPendingKey = ""
         finishedPendingKey = ""
         armSentKey = ""
+        cancellationAckKey = ""
+        cancellationAckConfirmedKey = ""
+        cancellationAckLastSentMs = -1
         readySentKey = ""
         roomState = ({})
         pendingControl = null
@@ -146,6 +153,9 @@ ApplicationWindow {
         deferredPendingKey = ""
         finishedPendingKey = ""
         armSentKey = ""
+        cancellationAckKey = ""
+        cancellationAckConfirmedKey = ""
+        cancellationAckLastSentMs = -1
         lastAuthorityReplyMs = -1
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
@@ -270,6 +280,50 @@ ApplicationWindow {
         }
         submitControl({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
         syncTools.logEvent("client.scheduled_command")
+    }
+    // The server keeps only the latest canceled event in a room snapshot.
+    // Do not ACK before the matching timer has been removed and an
+    // authoritative paused timeline has stopped local audible playback.
+    function cancellationKey(state) {
+        if (!state || !state.cancellation || !state.roomEpoch) return ""
+        var c = state.cancellation
+        return state.roomEpoch + ":" + String(c.trackGeneration) + ":" +
+                String(c.eventId) + ":" + String(c.stateRevision)
+    }
+    function applyCancellation(state) {
+        if (!state || !state.cancellation) return
+        var c = state.cancellation
+        if (Number(c.stateRevision) > Number(state.stateRevision)) return
+        var key = String(c.trackGeneration) + ":" + String(c.eventId)
+        if (scheduledKey === key) {
+            playbackTimer.stop()
+            scheduledKey = ""
+        }
+        if (deferredPendingKey === key) deferredPendingKey = ""
+        if (armSentKey === key) armSentKey = ""
+        if (state.playback && state.playback.playState === "paused")
+            player.pause()
+    }
+    function transmitCancellationReceipt() {
+        if (!authenticated || socket.status !== WebSocket.Open) return
+        var state = roomState
+        if (!state || !state.cancellation || !state.playback) return
+        var c = state.cancellation
+        if (Number(c.stateRevision) > Number(state.stateRevision)) return
+        var key = cancellationKey(state)
+        if (key === "" || cancellationAckConfirmedKey === key) return
+        var eventKey = String(c.trackGeneration) + ":" + String(c.eventId)
+        if (scheduledKey === eventKey) return
+        if (state.playback.playState === "paused" &&
+                player.playbackState === MediaPlayer.PlayingState) return
+        var now = syncTools.monotonicMs()
+        if (cancellationAckKey === key && cancellationAckLastSentMs >= 0 &&
+                now - cancellationAckLastSentMs < 1200) return
+        cancellationAckKey = key
+        cancellationAckLastSentMs = now
+        send({type:"cancel_ack", roomEpoch:state.roomEpoch,
+              trackGeneration:c.trackGeneration, eventId:c.eventId,
+              stateRevision:c.stateRevision})
     }
     function predictedPosition(p) {
         var v = Number(p.anchorMediaMs)
@@ -477,6 +531,9 @@ ApplicationWindow {
                 window.readySentKey = ""
                 window.scheduledKey = ""
                 window.armSentKey = ""
+                window.cancellationAckKey = ""
+                window.cancellationAckConfirmedKey = ""
+                window.cancellationAckLastSentMs = -1
                 playbackTimer.stop()
                 player.pause() // Conservative policy: do not free-run while disconnected.
                 if (window.roomId !== "") window.logText = "Connection lost; retrying"
@@ -495,6 +552,9 @@ ApplicationWindow {
                 window.pendingProbes = ({})
                 window.lastAuthorityReplyMs = -1
                 window.armSentKey = ""
+                window.cancellationAckKey = ""
+                window.cancellationAckConfirmedKey = ""
+                window.cancellationAckLastSentMs = -1
                 window.probeClock()
                 // Resend the same operation ID after reconnect; never create a
                 // second event if the first command was already accepted.
@@ -514,6 +574,9 @@ ApplicationWindow {
                     window.deferredPendingKey = ""
                     window.finishedPendingKey = ""
                     window.armSentKey = ""
+                    window.cancellationAckKey = ""
+                    window.cancellationAckConfirmedKey = ""
+                    window.cancellationAckLastSentMs = -1
                     playbackTimer.stop()
                     player.pause()
                     window.probeClock()
@@ -521,6 +584,7 @@ ApplicationWindow {
                 if (!window.roomState.stateRevision || msg.state.stateRevision >= window.roomState.stateRevision) {
                     window.lastAuthorityReplyMs = syncTools.monotonicMs()
                     window.roomState = msg.state
+                    window.applyCancellation(msg.state)
                     if (msg.state.playback && msg.state.playback.trackId && !window.sameRecording()) {
                         player.pause()
                         playbackTimer.stop()
@@ -529,7 +593,13 @@ ApplicationWindow {
                     }
                     window.maybeReady()
                     window.reconcile()
+                    window.transmitCancellationReceipt()
                 }
+            } else if (msg.type === "cancel_ack_ok") {
+                var ack = msg.roomEpoch + ":" + String(msg.trackGeneration) +
+                        ":" + String(msg.eventId) + ":" + String(msg.stateRevision)
+                if (window.cancellationAckKey === ack)
+                    window.cancellationAckConfirmedKey = ack
             } else if (msg.type === "command_ack") {
                 if (window.pendingControl && msg.operationId === window.pendingControl.operationId) {
                     window.pendingControl = null
@@ -559,6 +629,7 @@ ApplicationWindow {
             window.logText = "Clock estimate expired; playback paused pending recalibration"
         }
         window.reconcile()
+        window.transmitCancellationReceipt()
     }}
     // Probe during active playback/pending events; do not change the
     // idle-state 15-second probe interval.

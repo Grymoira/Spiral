@@ -46,14 +46,29 @@ type Member struct {
 	Ready bool   `json:"ready"`
 }
 
+// CancellationNotice is a bounded, event-specific tombstone. Its revision
+// identifies the authoritative state change that retired the old appointment.
+// It never contains tokens, paths or client identifiers.
+type CancellationNotice struct {
+	EventID         uint64 `json:"eventId"`
+	TrackGeneration uint64 `json:"trackGeneration"`
+	StateRevision   uint64 `json:"stateRevision"`
+}
+
+type cancellationReceipt struct {
+	notice      CancellationNotice
+	outstanding map[string]bool // Member IDs awaiting application-level receipt.
+}
+
 type Snapshot struct {
-	RoomID        string   `json:"roomId"`
-	StateRevision uint64   `json:"stateRevision"`
-	Members       []Member `json:"members"`
-	RoomEpoch     string   `json:"roomEpoch"`
-	ClockEpoch    string   `json:"clockEpoch"`
-	ServerMs      int64    `json:"serverMs"`
-	Playback      Playback `json:"playback"`
+	RoomID        string              `json:"roomId"`
+	StateRevision uint64              `json:"stateRevision"`
+	Members       []Member            `json:"members"`
+	RoomEpoch     string              `json:"roomEpoch"`
+	ClockEpoch    string              `json:"clockEpoch"`
+	ServerMs      int64               `json:"serverMs"`
+	Playback      Playback            `json:"playback"`
+	Cancellation  *CancellationNotice `json:"cancellation,omitempty"`
 }
 
 type Credentials struct {
@@ -82,6 +97,7 @@ type room struct {
 	operations     map[string]controlReceipt
 	operationOrder []string
 	armingAcks     map[string]bool       // per-member acknowledgements for the current playing event
+	cancellation   *cancellationReceipt  // Latest canceled pending event; bounded per room.
 	members        map[string]membership // Key is an unpredictable session token.
 }
 
@@ -261,6 +277,7 @@ func (s *Store) purgeExpired(r *room) bool {
 			// before removal makes the remaining Ready set look complete.
 			s.suspendPlaybackLocked(r)
 			delete(r.members, token)
+			s.forgetCancellationMemberLocked(r, m.member.ID)
 			r.revision++
 			s.notifyExpiryLocked()
 		}
@@ -322,6 +339,10 @@ func (s *Store) Snapshot(roomID, token string) (Snapshot, error) {
 // snapshot must be called while holding s.mu.
 func (s *Store) snapshot(r *room) Snapshot {
 	snap := Snapshot{RoomID: r.id, RoomEpoch: r.epoch, ClockEpoch: s.clockEpoch, ServerMs: s.ServerMs(), Playback: r.playback, StateRevision: r.revision, Members: make([]Member, 0, len(r.members))}
+	if r.cancellation != nil {
+		notice := r.cancellation.notice
+		snap.Cancellation = &notice
+	}
 	for _, m := range r.members {
 		snap.Members = append(snap.Members, m.member)
 	}
@@ -362,6 +383,7 @@ func (s *Store) Leave(roomID, token string) error {
 	}
 	s.suspendPlaybackLocked(r)
 	delete(r.members, token)
+	s.forgetCancellationMemberLocked(r, member.member.ID)
 	r.revision++
 	return nil
 }

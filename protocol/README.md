@@ -164,3 +164,40 @@ The authoritative snapshot reports the resulting state/revision, but delivery
 during a network partition is not guaranteed. Explicit event-scoped CANCEL
 receipt semantics, real Qt output and acoustic measurements remain required
 before closing Issue #11.
+
+### Event-scoped cancellation receipt (Issue #11, phase 4 prototype)
+
+When an unexecuted pending appointment is retired by a new track/command,
+readiness or membership loss, or an expired ARM timeout, the authoritative
+snapshot includes an optional `cancellation` tombstone with `eventId`,
+`trackGeneration`, and the `stateRevision` that retired it. The room's
+existing `roomEpoch` identifies the room instance. Only the **latest**
+canceled pending event is retained (at most five member receipts per room);
+this is intentionally not a durable cancellation history.
+
+After applying the authoritative state and stopping any local timer for that
+exact event (and pausing local playback when the room is paused), the client
+sends this authenticated WebSocket message:
+
+```json
+{"type":"cancel_ack","roomEpoch":"ROOM_EPOCH","trackGeneration":1,"eventId":7,"stateRevision":12}
+```
+
+The server checks the member's current authenticated socket, room epoch,
+track generation, event ID and cancellation revision. It counts at most one
+receipt per current member, returns `cancel_ack_ok` with the same identifiers,
+and accepts identical retries as no-ops. The Qt client resends at most about
+once per 1.2 seconds until this response arrives, and retries after reconnect.
+A departing/expired member is removed from the outstanding receipt set.
+No token or local media path enters the cancellation record or log.
+
+**Safety limits:** This is a verifiable *application-level statement* that a
+client processed a cancellation, not proof of physical acoustic silence.
+Receipt absence does not itself hold the room in a blocked state; a newer
+cancellation replaces the old record, so late ACKs for a superseded notice
+are rejected. A partitioned/offline client may never receive the snapshot,
+and the existing 2.5-second watchdog remains the local fallback. No explicit
+delivery guarantee, durable receipt history, deterministic partition safety,
+or real-device output timing has been established. Old clients lacking this
+command will not produce receipts; coordinated upgrades are needed to use
+receipt diagnostics meaningfully. Issue #11 stays open.

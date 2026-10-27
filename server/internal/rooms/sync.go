@@ -202,13 +202,13 @@ func (s *Store) setTrackLocked(r *room, hash string, durationMs int64, reload bo
 	if !reload && r.playback.TrackID == hash && r.playback.DurationMs == durationMs {
 		return false
 	}
+	s.discardPendingLocked(r)
 	r.playback.TrackID = hash
 	r.playback.DurationMs = durationMs
 	r.playback.TrackGeneration++
 	r.playback.PlayState = "paused"
 	r.playback.AnchorMediaMs = 0
 	r.playback.AnchorServerMs = s.ServerMs()
-	r.playback.Pending = nil
 	r.armingAcks = nil
 	for k, member := range r.members {
 		member.member.Ready = false
@@ -226,8 +226,7 @@ func (s *Store) cancelUnreadyPlaybackLocked(r *room) bool {
 	}
 	for _, m := range r.members {
 		if !m.member.Ready {
-			r.playback.Pending = nil
-			r.armingAcks = nil
+			s.discardPendingLocked(r)
 			return true
 		}
 	}
@@ -268,10 +267,64 @@ func (s *Store) suspendPlaybackLocked(r *room) {
 	wasPlaying := r.playback.PlayState == "playing"
 	if pending := r.playback.Pending; pending != nil &&
 		(pending.PlayState == "playing" || (wasPlaying && pending.Action == "pause")) {
+		s.discardPendingLocked(r)
+	}
+	s.pausePlaybackLocked(r)
+}
+
+// discardPendingLocked records an event-specific tombstone before replacing
+// a queued action. A single latest cancellation and at most five acknowledgers
+// bound memory without turning the room into an unbounded event history.
+// Each caller increments r.revision exactly once after this helper returns.
+func (s *Store) discardPendingLocked(r *room) {
+	if e := r.playback.Pending; e != nil {
+		outstanding := make(map[string]bool, len(r.members))
+		for _, m := range r.members {
+			outstanding[m.member.ID] = true
+		}
+		r.cancellation = &cancellationReceipt{
+			notice: CancellationNotice{
+				EventID: e.ID, TrackGeneration: e.TrackGeneration,
+				StateRevision: r.revision + 1,
+			},
+			outstanding: outstanding,
+		}
 		r.playback.Pending = nil
 		r.armingAcks = nil
 	}
-	s.pausePlaybackLocked(r)
+}
+
+// forgetCancellationMemberLocked prevents departed/expired members from
+// leaving permanent unacknowledgeable receipts in the current room record.
+func (s *Store) forgetCancellationMemberLocked(r *room, memberID string) {
+	if r.cancellation != nil {
+		delete(r.cancellation.outstanding, memberID)
+	}
+}
+
+// AcknowledgeCancellation verifies a member's application-level claim that it
+// has processed the latest canceled appointment. An ACK never grants Ready,
+// schedules a new event or proves that an audio device stopped acoustically.
+// A duplicate ACK on the current cancellation is harmless.
+func (s *Store) AcknowledgeCancellation(roomID, token, roomEpoch string,
+	generation, eventID, revision uint64) (remaining int, applied bool, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, m, err := s.authorized(roomID, token)
+	if err != nil {
+		return 0, false, err
+	}
+	if r.cancellation == nil || roomEpoch != r.epoch ||
+		r.cancellation.notice.EventID != eventID ||
+		r.cancellation.notice.TrackGeneration != generation ||
+		r.cancellation.notice.StateRevision != revision {
+		return 0, false, ErrInvalidState
+	}
+	if r.cancellation.outstanding[m.member.ID] {
+		delete(r.cancellation.outstanding, m.member.ID)
+		return len(r.cancellation.outstanding), true, nil
+	}
+	return len(r.cancellation.outstanding), false, nil
 }
 
 // pausePlaybackLocked freezes the authoritative audio position at the
@@ -345,6 +398,8 @@ func (s *Store) scheduleLocked(r *room, action string, mediaMs int64, requireArm
 	if action != "seek" {
 		mediaMs = mediaAt(r.playback, at)
 	}
+	// Replacing an appointment also cancels the former event at this revision.
+	s.discardPendingLocked(r)
 	r.nextEvent++
 	event := &ScheduledEvent{
 		ID: r.nextEvent, Action: action, TrackGeneration: r.playback.TrackGeneration,
@@ -417,8 +472,7 @@ func (s *Store) ExpireArming(roomID string, eventID uint64) (Snapshot, bool) {
 	if e.ID != eventID || e.Phase != "arming" || s.ServerMs() < e.ArmExpiresServerMs {
 		return Snapshot{}, false
 	}
-	r.playback.Pending = nil
-	r.armingAcks = nil
+	s.discardPendingLocked(r)
 	r.revision++
 	return s.snapshot(r), true
 }

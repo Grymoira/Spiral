@@ -429,6 +429,34 @@ func TestRESTLeaveFencesCommittedPlayAndNotifiesRemainingSocket(t *testing.T) {
 	if playback(canceled)["playState"] != "paused" {
 		t.Fatalf("member departure failed to cancel play: %v", playback(canceled))
 	}
+	notice, ok := state(canceled)["cancellation"].(map[string]any)
+	if !ok || uint64(notice["eventId"].(float64)) != id ||
+		uint64(notice["stateRevision"].(float64)) != uint64(state(canceled)["stateRevision"].(float64)) {
+		t.Fatalf("missing event-scoped cancellation notice: %v", state(canceled))
+	}
+	ack := map[string]any{
+		"type":            "cancel_ack",
+		"roomEpoch":       state(canceled)["roomEpoch"],
+		"trackGeneration": notice["trackGeneration"],
+		"eventId":         notice["eventId"],
+		"stateRevision":   notice["stateRevision"],
+	}
+	h.send(t, ack)
+	received := h.until(t, "cancel_ack_ok", nil)
+	if received["eventId"] != notice["eventId"] || received["stateRevision"] != notice["stateRevision"] {
+		t.Fatalf("incorrect cancellation receipt: %+v", received)
+	}
+	// A retransmitted ACK is idempotent, even after the other guest left.
+	h.send(t, ack)
+	if m := h.until(t, "cancel_ack_ok", nil); m["eventId"] != notice["eventId"] {
+		t.Fatalf("duplicate cancellation ACK rejected: %+v", m)
+	}
+	// A client cannot acknowledge an arbitrary future state revision.
+	ack["stateRevision"] = uint64(notice["stateRevision"].(float64)) + 1
+	h.send(t, ack)
+	if m := h.until(t, "error", nil); m["code"] != "invalid_state" {
+		t.Fatalf("forged cancellation ACK was accepted: %+v", m)
+	}
 	if _, committed := store.CommitEvent(host.RoomID, id); committed {
 		t.Fatal("stale future playing event committed after REST leave")
 	}

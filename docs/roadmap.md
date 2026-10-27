@@ -97,3 +97,17 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       freezes active playback, preserving legitimate paused seeks.
 - [ ] Design event-scoped cancellation receipts, network fault injection and
       cross-platform acoustic tests. Issue #11 stays open.
+
+## Issue #11 phase 4: bounded cancellation receipts
+
+- [x] Attach an event ID, track generation and cancellation revision to the
+      latest server-retired pending appointment in authoritative snapshots.
+- [x] Require authenticated, current-member `cancel_ack` messages; retain
+      bounded per-member acknowledgement state and reply idempotently.
+- [x] Have Qt apply a matching cancellation before acknowledging; throttle
+      retries and retry following reconnect. Add Store, WebSocket and QML tests.
+- [ ] Define policy when not all acknowledgements arrive (block, evict or
+      otherwise fail closed) and how to handle multiple rapid cancellations,
+      hard network partitions, sleep/wake and actual acoustic silence.
+- [ ] Measure two real devices' onset error (P50/P95/max) with an explicit
+      test methodology and acceptance thresholds. Keep Issue #11 OPEN.
