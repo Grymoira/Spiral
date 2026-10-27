@@ -30,7 +30,7 @@ function scenario() {
         play(){this.playbackState=2; mock.plays++;},
         pause(){this.playbackState=0; mock.pauses++;} };
     const context = {
-        authenticated: true, clockReady: true, clockOffsetMs: 0,
+        authenticated: true, clockReady: true, mediaFaulted: false, clockOffsetMs: 0,
         clockSamples: 3, bestRttMs: 10, lastClockSampleMs: 1000,
         lastAuthorityReplyMs: 900, authorityStaleAfterMs: 2500,
         clockEpoch: "epoch", pendingProbes: {}, scheduledKey: "", armSentKey:"",
