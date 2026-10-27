@@ -209,6 +209,13 @@ func strictEnvelope(data []byte) (envelope, error) {
 	accepted := map[string]bool{}
 	for _, key := range keys {
 		accepted[key] = true
+		// All fields in a command schema are required. Go's JSON decoder
+		// otherwise maps absent or null scalar values to false/zero, which
+		// could silently revoke readiness or seek to the start of a track.
+		raw, present := fields[key]
+		if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return envelope{}, errors.New("missing or null required field")
+		}
 	}
 	for k := range fields {
 		if !accepted[k] {
