@@ -307,3 +307,26 @@ produce divergent playback. End-to-end Qt multimedia output testing,
 cancellation acknowledgement, physical two-device acoustical P50/P95/max
 measurement with agreed tolerances, platform suspend/reconnect and partition
 testing are still REQUIRED for Issue #11. No Release-level accuracy claim.
+
+## Issue #11 phase 2 — authoritative readiness loss and partition watchdog
+
+When a member loses Ready, disconnects, leaves/expires, or a new member joins
+an already-playing room, the Store now immediately freezes the authoritative
+media position at its monotonic server clock and pauses the room. Surviving
+sockets receive an updated snapshot; disconnected devices cannot be assumed
+to receive it. No existing authentication, TLS or room limits were relaxed.
+
+The Qt client now requires recent proof of server connectivity during playing
+and pending playback. A correctly validated room snapshot or clock-probe reply
+refreshes a monotonic last-contact value (stored as QML real). A 700ms probe
+cadence is enabled only when playback/pending is active, while the normal
+15-second idle cadence is unchanged. After 2,500ms with no authoritative
+response, the 500ms watchdog pauses audio and timers, revokes Ready on a
+best-effort basis and requires fresh clock calibration before resumption.
+Open socket status by itself is not proof of live connectivity.
+
+This is a fail-closed *tradeoff*, not a global cancellation guarantee:
+packet-loss spikes may pause healthy peers and process suspension or Qt GUI
+event delays can extend the detection bound. The server cannot prove every
+partitioned device received an abort; physical multimedia buffering and
+two-device acoustic timing remain untested. Issue #11 remains OPEN.

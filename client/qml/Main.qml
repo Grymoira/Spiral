@@ -32,6 +32,9 @@ ApplicationWindow {
     property real bestRttMs: 1000000
     property int clockSamples: 0
     property int lastClockSampleMs: -1
+    // Monotonic timestamps need QML real (double), never int32.
+    property real lastAuthorityReplyMs: -1
+    readonly property int authorityStaleAfterMs: 2500
     property string clockEpoch: ""
     property int probeSequence: 0
     property var pendingProbes: ({})
@@ -92,6 +95,7 @@ ApplicationWindow {
         clockSamples = 0
         bestRttMs = 1000000
         clockEpoch = ""
+        lastAuthorityReplyMs = -1
         scheduledKey = ""
         deferredPendingKey = ""
         finishedPendingKey = ""
@@ -142,6 +146,7 @@ ApplicationWindow {
         deferredPendingKey = ""
         finishedPendingKey = ""
         armSentKey = ""
+        lastAuthorityReplyMs = -1
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
         var base = syncTools.validatedServerBase(serverUrl)
@@ -177,6 +182,9 @@ ApplicationWindow {
         var offset = ((msg.s1 - c0) + (msg.s2 - c3)) / 2
         clockSamples++
         lastClockSampleMs = syncTools.monotonicMs()
+        // A validated reply proves the socket has delivered earlier,
+        // TCP-ordered server frames (including room cancellations).
+        lastAuthorityReplyMs = c3
         if (rtt < bestRttMs || clockSamples % 10 === 0) {
             bestRttMs = rtt
             if (clockOffsetMs !== offset) {
@@ -279,9 +287,33 @@ ApplicationWindow {
     // Keep the readiness barrier on BOTH arming and firing the timer.
     // On temporary media loss, resume only after a current authoritative
     // snapshot again confirms this member is ready to play the same track.
+    function authorityFresh() {
+        return authenticated && clockReady && lastAuthorityReplyMs >= 0 &&
+                syncTools.monotonicMs() - lastAuthorityReplyMs <= authorityStaleAfterMs
+    }
+    // Fail closed when a network partition leaves Qt WebSocket looking Open.
+    // This is a bounded local safety watchdog, not confirmed cancellation.
+    function safeguardAuthority() {
+        if (!authenticated || !clockReady || !roomState.playback) return
+        var p = roomState.playback
+        var audibleOrQueued = p.playState === "playing" ||
+                (p.pending && p.pending.phase === "committed" && p.pending.playState === "playing") ||
+                player.playbackState === MediaPlayer.PlayingState
+        if (!audibleOrQueued || authorityFresh()) return
+        revokeReady()
+        clockReady = false
+        clockSamples = 0
+        bestRttMs = 1000000
+        playbackTimer.stop()
+        scheduledKey = ""
+        armSentKey = ""
+        player.pause()
+        syncTools.logEventLevel("client.authority_stale", "WARN")
+        logText = "Server confirmation stalled; playback paused pending a fresh clock"
+    }
     function pendingUsable(p) {
         return authenticated && clockReady && sameRecording() && mediaLoaded() &&
-                (p.pending.playState !== "playing" || ownReady())
+                (p.pending.playState !== "playing" || (ownReady() && authorityFresh()))
     }
     function deferPending(key) {
         if (scheduledKey !== "" || playbackTimer.running)
@@ -297,7 +329,8 @@ ApplicationWindow {
     function acknowledgeArming(p) {
         if (!p.pending || p.pending.phase !== "arming") return
         var key = String(p.trackGeneration) + ":" + p.pending.id
-        if (!authenticated || !clockReady || !sameRecording() || !mediaLoaded() || !ownReady()) return
+        if (!authenticated || !clockReady || !authorityFresh() ||
+                !sameRecording() || !mediaLoaded() || !ownReady()) return
         if (armSentKey === key || socket.status !== WebSocket.Open) return
         armSentKey = key
         send({type:"arm_ack", trackId:p.trackId,
@@ -310,6 +343,7 @@ ApplicationWindow {
         // A stopped timer or a completed event must never execute again.
         if (scheduledKey !== key || finishedPendingKey === key) return
         if (!pendingUsable(p)) {
+            safeguardAuthority()
             deferPending(key)
             return
         }
@@ -348,6 +382,10 @@ ApplicationWindow {
     function reconcile() {
         if (!authenticated || !roomState.playback) return
         var p = roomState.playback
+        if (p.playState === "playing" && !authorityFresh()) {
+            safeguardAuthority()
+            return
+        }
         if (p.pending) {
             var key = String(p.trackGeneration) + ":" + p.pending.id
             if (p.pending.phase === "arming") {
@@ -363,6 +401,10 @@ ApplicationWindow {
                 return
             }
             if (finishedPendingKey === key) return
+            if (p.pending.playState === "playing" && !authorityFresh()) {
+                safeguardAuthority()
+                return
+            }
             if (!pendingUsable(p)) {
                 deferPending(key)
                 return
@@ -431,6 +473,7 @@ ApplicationWindow {
                 syncTools.logEventLevel("client.websocket_closed", "WARN")
                 window.authenticated = false
                 window.clockReady = false
+                window.lastAuthorityReplyMs = -1
                 window.readySentKey = ""
                 window.scheduledKey = ""
                 window.armSentKey = ""
@@ -450,6 +493,7 @@ ApplicationWindow {
                 window.bestRttMs = 1000000
                 window.clockSamples = 0
                 window.pendingProbes = ({})
+                window.lastAuthorityReplyMs = -1
                 window.armSentKey = ""
                 window.probeClock()
                 // Resend the same operation ID after reconnect; never create a
@@ -463,6 +507,7 @@ ApplicationWindow {
                     window.clockReady = false
                     window.clockSamples = 0
                     window.bestRttMs = 1000000
+                    window.lastAuthorityReplyMs = -1
                     window.clockEpoch = msg.state.clockEpoch
                     window.readySentKey = ""
                     window.scheduledKey = ""
@@ -474,6 +519,7 @@ ApplicationWindow {
                     window.probeClock()
                 }
                 if (!window.roomState.stateRevision || msg.state.stateRevision >= window.roomState.stateRevision) {
+                    window.lastAuthorityReplyMs = syncTools.monotonicMs()
                     window.roomState = msg.state
                     if (msg.state.playback && msg.state.playback.trackId && !window.sameRecording()) {
                         player.pause()
@@ -499,6 +545,7 @@ ApplicationWindow {
     }
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
     Timer { interval: 500; running: true; repeat: true; onTriggered: {
+        window.safeguardAuthority()
         if (window.clockReady && window.lastClockSampleMs >= 0 && syncTools.monotonicMs() - window.lastClockSampleMs > 60000) {
             window.revokeReady()
             window.clockReady = false
@@ -513,6 +560,17 @@ ApplicationWindow {
         }
         window.reconcile()
     }}
+    // Probe during active playback/pending events; do not change the
+    // idle-state 15-second probe interval.
+    Timer {
+        interval: 700
+        running: window.authenticated && window.clockReady &&
+                 !!window.roomState.playback &&
+                 (window.roomState.playback.playState === "playing" ||
+                  !!window.roomState.playback.pending)
+        repeat: true
+        onTriggered: window.probeClock()
+    }
     Timer { interval: 15000; running: window.authenticated; repeat: true; onTriggered: window.probeClock() }
     Timer { interval: 600; running: window.authenticated && !window.clockReady; repeat: true; onTriggered: window.probeClock() }
     Timer {
