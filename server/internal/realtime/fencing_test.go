@@ -98,7 +98,7 @@ func TestSupersededUnregisterPreservesNewConnectionReadiness(t *testing.T) {
 	if snap.Members[0].Ready {
 		t.Fatal("replacement did not clear stale readiness")
 	}
-	if _, err := h.applyCommand(current, envelope{Type: "ready", TrackID: hash, TrackGeneration: 1, Ready: true}); err != nil {
+	if _, _, err := h.applyCommand(current, envelope{Type: "ready", TrackID: hash, TrackGeneration: 1, Ready: true}); err != nil {
 		t.Fatal(err)
 	}
 	h.unregister(old)

@@ -205,13 +205,13 @@ func strictEnvelope(data []byte) (envelope, error) {
 		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
 		"snapshot":    {"type"},
 	}
-	// Reload is an optional explicit track intent (defaults to false).
-	if m.Type == "track" {
-		keys = append(keys, "reload")
-	}
 	keys, ok := allowed[m.Type]
 	if !ok {
 		return envelope{}, errors.New("unknown action")
+	}
+	// Reload is an optional explicit track intent (defaults to false).
+	if m.Type == "track" {
+		keys = append(keys, "reload")
 	}
 	accepted := map[string]bool{}
 	for _, key := range keys {
