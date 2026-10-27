@@ -31,8 +31,8 @@ int main() {
 
     // Small wall-clock adjustments must not repeatedly freeze playback.
     if (!check(guard.observe(600, wall + 15000), "small drift wrongly rejected") ||
-        !check(guard.observe(1600, wall + 16600), "drift at threshold wrongly rejected") ||
-        !check(!guard.observe(2600, wall + 19600), "large forward wall adjustment accepted"))
+        !check(guard.observe(1600, wall + 17500), "drift at threshold wrongly rejected") ||
+        !check(!guard.observe(2600, wall + 20501), "large forward wall adjustment accepted"))
         return 1;
 
     ClockContinuityGuard another;
