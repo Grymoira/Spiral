@@ -179,7 +179,19 @@ ApplicationWindow {
         logText = "Left room"
     }
     function acceptWakeSnapshot(message) {
-        if (!wakeSnapshotId || message.operationId !== wakeSnapshotId) return false
+        if (!wakeSnapshotId || message.operationId !== wakeSnapshotId ||
+                !message.state || !message.state.playback) return false
+        var p = message.state.playback
+        // A delayed COMMIT may have made the room play while this client was
+        // suspended. Never treat that state as permission to join late.
+        if (p.playState === "playing" ||
+                (p.pending && p.pending.playState === "playing")) {
+            if (authenticated && p.trackId) {
+                send({type:"ready", trackId:p.trackId,
+                      trackGeneration:p.trackGeneration, ready:false})
+            }
+            return false
+        }
         wakeSnapshotId = ""
         wakeSnapshotLastSentMs = -1
         return true
@@ -197,7 +209,12 @@ ApplicationWindow {
     // stop locally before interpreting any queued timer or probe response.
     function guardClockContinuity() {
         if (syncTools.clockContinuityOk()) return true
-        revokeReady()
+        // Send Ready(false) even if the old readySentKey has been cleared.
+        // The server may still hold Ready after an unseen COMMIT.
+        if (authenticated && roomState.playback && roomState.playback.trackId) {
+            send({type:"ready", trackId:roomState.playback.trackId,
+                  trackGeneration:roomState.playback.trackGeneration, ready:false})
+        }
         clockReady = false
         clockSamples = 0
         bestRttMs = 1000000
@@ -660,8 +677,8 @@ ApplicationWindow {
                     window.cancellationAckKey = ""
                     window.cancellationAckConfirmedKey = ""
                     window.cancellationAckLastSentMs = -1
-                    window.wakeSnapshotId = ""
-                    window.wakeSnapshotLastSentMs = -1
+                    // A clock-epoch reset must not release a wake barrier
+                    // unless the correlated server snapshot has arrived.
                     playbackTimer.stop()
                     player.pause()
                     window.probeClock()
