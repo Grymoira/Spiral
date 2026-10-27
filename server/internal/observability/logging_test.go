@@ -54,3 +54,14 @@ func TestWebSocketWriterIsNotWrapped(t *testing.T) {
 		t.Fatal("unexpected WS HTTP log")
 	}
 }
+
+func TestMemberRemovalLogRouteNeverIncludesDynamicMemberID(t *testing.T) {
+	secret := "private-member-id-value"
+	path := "/v1/rooms/private-room-id/members/" + secret
+	if actual := routeName(path); actual != "rooms.member_remove" || strings.Contains(actual, secret) {
+		t.Fatalf("dynamic identifier leaked to route label: %q", actual)
+	}
+	if got := routeName("/v1/rooms/private-room-id/members/me"); got != "rooms.leave" {
+		t.Fatalf("leave route changed: %q", got)
+	}
+}
