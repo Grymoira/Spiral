@@ -47,6 +47,10 @@ ApplicationWindow {
     property string cancellationAckKey: ""
     property string cancellationAckConfirmedKey: ""
     property real cancellationAckLastSentMs: -1
+    // A sleeping application must fetch a correlated new snapshot before
+    // recalibration can restore Ready or a previously scheduled event.
+    property string wakeSnapshotId: ""
+    property real wakeSnapshotLastSentMs: -1
     // A late playing-state appointment must wait for the authoritative
     // committed snapshot rather than starting from an expired local timer.
     readonly property int maxLatePlayMs: 250
@@ -107,6 +111,8 @@ ApplicationWindow {
         cancellationAckKey = ""
         cancellationAckConfirmedKey = ""
         cancellationAckLastSentMs = -1
+        wakeSnapshotId = ""
+        wakeSnapshotLastSentMs = -1
         readySentKey = ""
         roomState = ({})
         pendingControl = null
@@ -156,6 +162,8 @@ ApplicationWindow {
         cancellationAckKey = ""
         cancellationAckConfirmedKey = ""
         cancellationAckLastSentMs = -1
+        wakeSnapshotId = ""
+        wakeSnapshotLastSentMs = -1
         lastAuthorityReplyMs = -1
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
@@ -170,6 +178,47 @@ ApplicationWindow {
         syncTools.logEvent("client.room_left")
         logText = "Left room"
     }
+    function requestWakeSnapshot() {
+        if (!wakeSnapshotId || !authenticated || socket.status !== WebSocket.Open) return
+        var now = syncTools.monotonicMs()
+        if (wakeSnapshotLastSentMs >= 0 && now - wakeSnapshotLastSentMs < 1200) return
+        wakeSnapshotLastSentMs = now
+        send({type:"snapshot", operationId:wakeSnapshotId})
+    }
+    // Some OS monotonic clocks exclude time spent suspended. In that case the
+    // usual 2.5s server lease can look recent after hours of system sleep.
+    // A divergence with wall-clock elapsed time is an unsafe time discontinuity:
+    // stop locally before interpreting any queued timer or probe response.
+    function guardClockContinuity() {
+        if (syncTools.clockContinuityOk()) return true
+        revokeReady()
+        clockReady = false
+        clockSamples = 0
+        bestRttMs = 1000000
+        lastClockSampleMs = -1
+        lastAuthorityReplyMs = -1
+        pendingProbes = ({})
+        readySentKey = ""
+        scheduledKey = ""
+        deferredPendingKey = ""
+        finishedPendingKey = ""
+        armSentKey = ""
+        cancellationAckKey = ""
+        cancellationAckConfirmedKey = ""
+        cancellationAckLastSentMs = -1
+        playbackTimer.stop()
+        player.pause()
+        wakeSnapshotId = ""
+        wakeSnapshotLastSentMs = -1
+        if (authenticated && socket.status === WebSocket.Open) {
+            wakeSnapshotId = syncTools.newOperationId()
+            requestWakeSnapshot()
+            probeClock()
+        }
+        syncTools.logEventLevel("client.clock_discontinuity", "WARN")
+        logText = "Clock changed during sleep/wake; playback paused until a fresh room snapshot and recalibration"
+        return false
+    }
     function probeClock() {
         if (!authenticated) return
         // Bound unanswered samples across packet loss / intermittent networks.
@@ -182,6 +231,7 @@ ApplicationWindow {
         send({type: "clock_probe", probeId: id, c0: sent})
     }
     function receiveClock(msg) {
+        if (!guardClockContinuity()) return
         if (msg.clockEpoch !== clockEpoch || pendingProbes[msg.probeId] === undefined) return
         var c0 = pendingProbes[msg.probeId]
         delete pendingProbes[msg.probeId]
@@ -232,6 +282,7 @@ ApplicationWindow {
         return false
     }
     function maybeReady() {
+        if (!guardClockContinuity() || !!wakeSnapshotId) return
         if (!authenticated || !clockReady || !roomState.playback || !sameRecording()) return
         if (!mediaLoaded()) return
         var generation = roomState.playback.trackGeneration
@@ -274,6 +325,10 @@ ApplicationWindow {
                        reload:true})
     }
     function roomCommand(action, ms) {
+        if (!guardClockContinuity() || !!wakeSnapshotId) {
+            logText = "Waiting for a fresh clock and room state"
+            return
+        }
         if (memberRole !== "host" || !authenticated || !clockReady) {
             logText = "Host connection and a calibrated clock are required"
             return
@@ -314,7 +369,7 @@ ApplicationWindow {
             player.pause()
     }
     function transmitCancellationReceipt() {
-        if (!authenticated || socket.status !== WebSocket.Open) return
+        if (!!wakeSnapshotId || !authenticated || socket.status !== WebSocket.Open) return
         var state = roomState
         if (!state || !state.cancellation || !state.playback) return
         var c = state.cancellation
@@ -363,6 +418,7 @@ ApplicationWindow {
     // Fail closed when a network partition leaves Qt WebSocket looking Open.
     // This is a bounded local safety watchdog, not confirmed cancellation.
     function safeguardAuthority() {
+        if (!guardClockContinuity()) return
         if (!authenticated || !clockReady || !roomState.playback) return
         var p = roomState.playback
         var audibleOrQueued = p.playState === "playing" ||
@@ -406,6 +462,7 @@ ApplicationWindow {
               trackGeneration:p.trackGeneration, eventId:p.pending.id})
     }
     function executePending() {
+        if (!guardClockContinuity() || !!wakeSnapshotId) return
         var p = roomState.playback
         if (!p || !p.pending || p.pending.phase !== "committed") return
         var key = String(p.trackGeneration) + ":" + p.pending.id
@@ -450,6 +507,7 @@ ApplicationWindow {
     }
     function reconcile() {
         if (!authenticated || !roomState.playback) return
+        if (!guardClockContinuity() || !!wakeSnapshotId) return
         var p = roomState.playback
         if (p.playState === "playing" && !authorityFresh()) {
             safeguardAuthority()
@@ -549,6 +607,8 @@ ApplicationWindow {
                 window.cancellationAckKey = ""
                 window.cancellationAckConfirmedKey = ""
                 window.cancellationAckLastSentMs = -1
+                window.wakeSnapshotId = ""
+                window.wakeSnapshotLastSentMs = -1
                 playbackTimer.stop()
                 player.pause() // Conservative policy: do not free-run while disconnected.
                 if (window.roomId !== "") window.logText = "Connection lost; retrying"
@@ -570,6 +630,8 @@ ApplicationWindow {
                 window.cancellationAckKey = ""
                 window.cancellationAckConfirmedKey = ""
                 window.cancellationAckLastSentMs = -1
+                window.wakeSnapshotId = ""
+                window.wakeSnapshotLastSentMs = -1
                 window.probeClock()
                 // Resend the same operation ID after reconnect; never create a
                 // second event if the first command was already accepted.
@@ -592,6 +654,8 @@ ApplicationWindow {
                     window.cancellationAckKey = ""
                     window.cancellationAckConfirmedKey = ""
                     window.cancellationAckLastSentMs = -1
+                    window.wakeSnapshotId = ""
+                    window.wakeSnapshotLastSentMs = -1
                     playbackTimer.stop()
                     player.pause()
                     window.probeClock()
@@ -599,6 +663,10 @@ ApplicationWindow {
                 if (!window.roomState.stateRevision || msg.state.stateRevision >= window.roomState.stateRevision) {
                     window.lastAuthorityReplyMs = syncTools.monotonicMs()
                     window.roomState = msg.state
+                    if (window.wakeSnapshotId && msg.operationId === window.wakeSnapshotId) {
+                        window.wakeSnapshotId = ""
+                        window.wakeSnapshotLastSentMs = -1
+                    }
                     window.applyCancellation(msg.state)
                     if (msg.state.playback && msg.state.playback.trackId && !window.sameRecording()) {
                         player.pause()
@@ -633,6 +701,7 @@ ApplicationWindow {
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
     Timer { interval: 500; running: true; repeat: true; onTriggered: {
         window.safeguardAuthority()
+        window.requestWakeSnapshot()
         if (window.clockReady && window.lastClockSampleMs >= 0 && syncTools.monotonicMs() - window.lastClockSampleMs > 60000) {
             window.revokeReady()
             window.clockReady = false
