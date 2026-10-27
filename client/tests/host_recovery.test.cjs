@@ -18,10 +18,10 @@ for (let i = begin; i < qml.length; ++i) {
 }
 assert.ok(source, "unterminated member removal action");
 
-function setup() {
+function setup(responseStatus = 204) {
     const calls = [], events = [];
     function XHR() {
-        const request = {method:"", url:"", headers:{}, readyState:0, status:204};
+        const request = {method:"", url:"", headers:{}, readyState:0, status:responseStatus};
         request.open = function(method, url) { this.method = method; this.url = url; };
         request.setRequestHeader = function(key, value) {this.headers[key] = value;};
         request.send = function() {
@@ -71,11 +71,9 @@ function setup() {
     assert.equal(calls.length,0,"QML sent a removal request without host eligibility");
 }
 {
-    const {ctx,calls,events}=setup();
+    const {ctx,calls,events}=setup(403);
     ctx.removeGuest("guest-id");
-    const request=calls[0];
-    request.status=403;
-    request.onreadystatechange();
+    assert.equal(calls.length,1);
     assert.match(ctx.logText,/HTTP 403/);
     assert.ok(events.includes("client.room_error"));
     assert.ok(!ctx.logText.includes("secret-bearer"),"authorization leaked into error");
