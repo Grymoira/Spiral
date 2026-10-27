@@ -203,10 +203,31 @@ func TestTwoClientRealWebSocketTimeline(t *testing.T) {
 	pendingG := g.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
 	ph := playback(pendingH)["pending"].(map[string]any)
 	pg := playback(pendingG)["pending"].(map[string]any)
-	if ph["id"] != pg["id"] || ph["executeServerMs"] != pg["executeServerMs"] {
-		t.Fatal("different scheduled timelines")
+	if ph["id"] != pg["id"] || ph["phase"] != "arming" || pg["phase"] != "arming" {
+		t.Fatal("members did not receive the same ARM event")
 	}
-	// Real commit after the 2.5-second lead, broadcast to two independent TCP clients.
+	eventID := uint64(ph["id"].(float64))
+	h.send(t, map[string]any{"type": "arm_ack", "trackId": strings.Repeat("a", 64), "trackGeneration": 1, "eventId": eventID})
+	// A single ACK must never open the barrier.
+	beforeAck, err := store.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil || beforeAck.Playback.Pending == nil || beforeAck.Playback.Pending.Phase != "arming" {
+		t.Fatalf("single ACK committed playback: %+v %v", beforeAck, err)
+	}
+	g.send(t, map[string]any{"type": "arm_ack", "trackId": strings.Repeat("a", 64), "trackGeneration": 1, "eventId": eventID})
+	committedH := h.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "committed"
+	})
+	committedG := g.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "committed"
+	})
+	ch := playback(committedH)["pending"].(map[string]any)
+	cg := playback(committedG)["pending"].(map[string]any)
+	if ch["executeServerMs"] != cg["executeServerMs"] || ch["executeServerMs"].(float64) <= 0 {
+		t.Fatal("different committed deadlines")
+	}
+	// Real commit after the fresh 2.5-second lead, broadcast to two TCP clients.
 	finalH := h.until(t, "snapshot", func(m map[string]any) bool {
 		return playback(m)["pending"] == nil && playback(m)["playState"] == "playing"
 	})

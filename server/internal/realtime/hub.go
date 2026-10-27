@@ -25,6 +25,7 @@ type envelope struct {
 	DurationMs       int64  `json:"durationMs,omitempty"`
 	TrackID          string `json:"trackId,omitempty"`
 	TrackGeneration  uint64 `json:"trackGeneration,omitempty"`
+	EventID          uint64 `json:"eventId,omitempty"`
 	Ready            bool   `json:"ready,omitempty"`
 	Action           string `json:"action,omitempty"`
 	MediaMs          int64  `json:"mediaMs,omitempty"`
@@ -224,7 +225,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		seen[key] = true
 		// Fields must use protocol-exact lowerCamelCase names.
 		switch key {
-		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs", "operationId", "expectedRevision", "reload":
+		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs", "operationId", "expectedRevision", "reload", "eventId":
 		default:
 			return envelope{}, errors.New("unknown field")
 		}
@@ -252,6 +253,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		"clock_probe": {"type", "probeId", "c0"},
 		"track":       {"type", "sha256", "durationMs", "operationId", "expectedRevision"},
 		"ready":       {"type", "trackId", "trackGeneration", "ready"},
+		"arm_ack":     {"type", "trackId", "trackGeneration", "eventId"},
 		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
 		"snapshot":    {"type"},
 	}
@@ -377,12 +379,16 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 		return
 	}
 	event := *snap.Playback.Pending
-	delta := time.Duration(event.ExecuteServerMs-h.Store.ServerMs()) * time.Millisecond
+	deadline := event.ExecuteServerMs
+	if event.Phase == "arming" {
+		deadline = event.ArmExpiresServerMs
+	}
+	delta := time.Duration(deadline-h.Store.ServerMs()) * time.Millisecond
 	if delta < 0 {
 		delta = 0
 	}
 	h.timerMu.Lock()
-	if !h.Store.PendingMatches(roomID, event.ID) {
+	if !h.Store.PendingMatchesExact(roomID, event) {
 		h.timerMu.Unlock()
 		return
 	}
@@ -396,6 +402,13 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 			delete(h.timers, roomID)
 		}
 		h.timerMu.Unlock()
+		if event.Phase == "arming" {
+			if _, expired := h.Store.ExpireArming(roomID, event.ID); expired {
+				h.logger.Warn("playback.arm_timeout", "component", "synchronization", "event_id", event.ID)
+				h.Broadcast(roomID)
+			}
+			return
+		}
 		if _, ok := h.Store.CommitEvent(roomID, event.ID); ok {
 			h.logger.Info("playback.committed", "component", "synchronization", "event_id", event.ID, "action", event.Action, "track_generation", event.TrackGeneration)
 			h.Broadcast(roomID)
@@ -432,6 +445,8 @@ func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, bool, error) 
 	case "ready":
 		snap, err := h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
 		return snap, err == nil, err
+	case "arm_ack":
+		return h.Store.AcknowledgeArming(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.EventID)
 	case "schedule":
 		return h.Store.ControlSchedule(p.roomID, p.token, cmd.Action, cmd.MediaMs,
 			cmd.OperationID, cmd.ExpectedRevision)
@@ -557,6 +572,12 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			if err == nil {
 				diagnostic.Info("playback.readiness_changed", "ready", cmd.Ready)
 				h.Broadcast(p.roomID)
+			}
+		case "arm_ack":
+			if err == nil && applied {
+				diagnostic.Info("playback.armed", "event_id", cmd.EventID, "track_generation", cmd.TrackGeneration)
+				h.Broadcast(p.roomID)
+				h.scheduleTimer(p.roomID, snap)
 			}
 		case "schedule":
 			if err == nil && applied {

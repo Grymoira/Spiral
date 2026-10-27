@@ -81,6 +81,7 @@ type room struct {
 	playback       Playback
 	operations     map[string]controlReceipt
 	operationOrder []string
+	armingAcks     map[string]bool // per-member acknowledgements for the current playing event
 	members        map[string]membership // Key is an unpredictable session token.
 }
 
