@@ -350,3 +350,29 @@ locally. The pull request's GitHub Actions result must be inspected for actual
 Go race/vet/CTest and Qt build/QML test outcomes before merging. Explicit
 CANCEL receipt semantics, physical two-device audio measurements and real
 public-network partitions remain pending under #11.
+
+## Issue #11 phase 4 — bounded application-level cancellation receipts (2026-10-27)
+
+Baseline: `main` commit `9abef1ad491e8c53cf86db8aa891d55480fa1947`.
+The Store now exposes a latest-event cancellation tombstone in room snapshots
+and retains, at most, one outstanding-receipt map per room (no tokens or paths).
+The realtime server validates `cancel_ack` against the authorized session,
+room epoch, event generation, ID and cancellation revision; duplicates are
+idempotent and return `cancel_ack_ok`. Qt cancels the matching local timer,
+applies the authoritative paused state, then retries a narrowly scoped ACK
+until acknowledged or the session changes.
+
+Regression additions: Go Store tests cover incorrect event/generation/epoch/
+revision/unauthorized ACKs, duplicate receipts, superseding tombstones and
+departed members; a real HTTP + WebSocket integration test covers canceled
+committed playback and receipt echoes; a production-function QML regression
+tests local cancellation before ACK, retry, stale notices and socket shutdown.
+
+**Evidence boundary:** this connector-side source edit is not a local Qt
+runtime or physical audio verification. Inspect the PR and merged-main GitHub
+Actions results before claiming the suites have passed. An ACK records an
+application claim, not acoustic output. The latest-only receipt is not
+durable history, is not an all-member acknowledgement safety barrier, and
+cannot guarantee cancellation delivery during a partition. Real devices,
+network faults, suspend/resume behavior and acoustic P50/P95/max remain
+unfinished: Issue #11 must remain OPEN.
