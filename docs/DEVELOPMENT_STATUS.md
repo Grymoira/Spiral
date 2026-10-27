@@ -376,3 +376,30 @@ durable history, is not an all-member acknowledgement safety barrier, and
 cannot guarantee cancellation delivery during a partition. Real devices,
 network faults, suspend/resume behavior and acoustic P50/P95/max remain
 unfinished: Issue #11 must remain OPEN.
+
+## Issue #11 phase 5: outstanding receipt gate — 2026-10-27
+
+Source baseline: `main` commit `3e3ae9cad63840d7a1f531949b330614fa163746`.
+In earlier phase 4, the server observed `cancel_ack` but had no safety
+policy for absent ACKs. This increment makes the room reject an audible
+playing transition while any surviving member has not acknowledged the
+latest canceled event, and fences direct pending-to-play replacement. A
+new safe control may supersede a prior cancellation, but the new latest
+revision is treated as a cumulative watermark, resetting each member's
+receipt obligation. Qt reconciles and cancels **all stale timers** before
+ACKing this watermark, not only the exact event named by the notice.
+
+Go Store regression tests cover missing and partial receipts, Ready restoration,
+multiple rapid safe replacements, expired/removed member fences, a last-deadline
+invariant and zero-mutation rejected controls. Real HTTP/WebSocket integration
+deliberately withholds a guest's ACK while both sockets remain authenticated,
+ensuring the host cannot publish a new ARM despite all Ready flags being true.
+Qt production-function regressions cover skipped cancellation snapshots,
+current-event preservation, retries and reconnect.
+
+**Verification limits:** actual PASS results must be taken from this PR's
+GitHub Actions and merged-main run. The test that omits an ACK is controlled
+protocol fault injection, not a real OS sleep, Wi-Fi partition or acoustic
+measurement. No guaranteed cancellation delivery or simultaneous DAC output
+is claimed. A nonresponding current member can intentionally block room play;
+there is no server eviction/recovery policy yet. Issue #11 must remain OPEN.
