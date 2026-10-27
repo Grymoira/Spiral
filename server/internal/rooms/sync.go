@@ -32,14 +32,14 @@ type Playback struct {
 }
 
 type ScheduledEvent struct {
-	ID              uint64 `json:"id"`
-	Action          string `json:"action"`
-	TrackGeneration uint64 `json:"trackGeneration"`
-	ExecuteServerMs int64  `json:"executeServerMs"`
-	MediaMs         int64  `json:"mediaMs"`
-	PlayState       string `json:"playState"`
-	Phase           string `json:"phase"`
-	ArmExpiresServerMs int64 `json:"armExpiresServerMs,omitempty"`
+	ID                 uint64 `json:"id"`
+	Action             string `json:"action"`
+	TrackGeneration    uint64 `json:"trackGeneration"`
+	ExecuteServerMs    int64  `json:"executeServerMs"`
+	MediaMs            int64  `json:"mediaMs"`
+	PlayState          string `json:"playState"`
+	Phase              string `json:"phase"`
+	ArmExpiresServerMs int64  `json:"armExpiresServerMs,omitempty"`
 }
 
 // ServerMs uses a process-local monotonic epoch, distinct from wall clock timestamps.
