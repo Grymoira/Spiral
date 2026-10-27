@@ -36,6 +36,24 @@ jobs:
       - name: Execute CTest
         run: ctest --preset server-only --output-on-failure
 
+  # These regressions execute shipping QML functions in isolated Node VMs
+  # without requiring Qt/apt installation. Keep the Qt job as an independent
+  # compilation, CTest and headless runtime gate.
+  qml-protocol:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run every source-derived QML and transport regression
+        run: |
+          set -eu
+          for suite in client/tests/*.test.cjs; do
+            echo "::group::$suite"
+            node "$suite"
+            echo "::endgroup::"
+          done
+
   desktop-qt:
     runs-on: ubuntu-24.04
     permissions:
