@@ -138,3 +138,37 @@ func TestCancelOrReplaceArmingRevokesOldAcks(t *testing.T) {
 		t.Fatalf("old ACK accepted after event replacement: %v", err)
 	}
 }
+
+func TestPlayingArmCommitUsesFreshMediaAnchor(t *testing.T) {
+	s, host, guest, hash := preparedRoom(t)
+	s.mu.Lock()
+	r := s.rooms[host.RoomID]
+	r.playback.PlayState = "playing"
+	r.playback.AnchorMediaMs = 2000
+	r.playback.AnchorServerMs = s.ServerMs() - 3000
+	r.revision++
+	s.mu.Unlock()
+
+	before, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, applied, err := s.ControlSchedule(host.RoomID, host.SessionToken, "play", 0,
+		"arm-projection-1", before.StateRevision)
+	if err != nil || !applied || pending.Playback.Pending == nil {
+		t.Fatalf("play while already playing rejected: %v", err)
+	}
+	id := pending.Playback.Pending.ID
+	if _, committed, err := s.AcknowledgeArming(host.RoomID, host.SessionToken, hash, 1, id); err != nil || committed {
+		t.Fatalf("first ACK improperly finalized: %v", err)
+	}
+	result, committed, err := s.AcknowledgeArming(host.RoomID, guest.SessionToken, hash, 1, id)
+	if err != nil || !committed {
+		t.Fatalf("final ACK rejected: %v", err)
+	}
+	event := result.Playback.Pending
+	want := mediaAt(before.Playback, event.ExecuteServerMs)
+	if event.MediaMs != want {
+		t.Fatalf("delayed COMMIT must reanchor media: got %d, want %d", event.MediaMs, want)
+	}
+}

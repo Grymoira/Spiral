@@ -360,6 +360,11 @@ func (s *Store) AcknowledgeArming(roomID, token, trackID string, generation, eve
 	}
 	e.Phase = "committed"
 	e.ExecuteServerMs = s.ServerMs() + scheduleLeadMs
+	// A play command issued during existing playback must project its media
+	// anchor to the NEW deadline, not the provisional ARM creation time.
+	if e.Action != "seek" {
+		e.MediaMs = mediaAt(r.playback, e.ExecuteServerMs)
+	}
 	e.ArmExpiresServerMs = 0
 	r.armingAcks = nil
 	r.revision++
