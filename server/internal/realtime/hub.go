@@ -225,11 +225,12 @@ func (h *Hub) register(p *peer) {
 	}
 	old := h.clients[p.roomID][p.memberID]
 	h.clients[p.roomID][p.memberID] = p
+	// Replacement and readiness revocation must be atomic with commands.
+	h.clearReady(p)
 	h.mu.Unlock()
 	if old != nil {
 		old.close()
 	}
-	h.clearReady(p)
 }
 
 // isCurrent fences out a superseded connection, even if a buffered frame was
@@ -249,12 +250,17 @@ func (h *Hub) unregister(p *peer) {
 	if len(h.clients[p.roomID]) == 0 {
 		delete(h.clients, p.roomID)
 	}
-	h.mu.Unlock()
 	if current {
 		h.clearReady(p)
+	}
+	h.mu.Unlock()
+	if current {
 		h.Broadcast(p.roomID)
 	}
 }
+
+// clearReady is called with Hub.mu held, before registration or removal completes.
+// Lock ordering throughout Hub: Hub.mu before Store.mu.
 func (h *Hub) clearReady(p *peer) {
 	state, err := h.Store.Snapshot(p.roomID, p.token)
 	if err == nil && state.Playback.TrackID != "" {
@@ -319,6 +325,40 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 	})
 	h.timers[roomID] = pendingTimer
 	h.timerMu.Unlock()
+}
+
+var errSuperseded = errors.New("session superseded")
+
+// applyCommand holds the same lock from the current-peer check through the
+// authoritative Store mutation. A replacement cannot slip between them.
+// Lock ordering: Hub.mu -> Store.mu. Never broadcast while holding Hub.mu.
+func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.clients[p.roomID][p.memberID] != p {
+		return rooms.Snapshot{}, errSuperseded
+	}
+	// Also recheck REST leave/session expiry, which can revoke WS authority.
+	if _, err := h.Store.Authorize(p.roomID, p.token); err != nil {
+		return rooms.Snapshot{}, err
+	}
+	switch cmd.Type {
+	case "track":
+		snap, err := h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
+		if err == nil {
+			// Do not allow an old track handler to cancel a newer appointment.
+			h.cancelTimer(p.roomID)
+		}
+		return snap, err
+	case "ready":
+		return h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
+	case "schedule":
+		return h.Store.Schedule(p.roomID, p.token, cmd.Action, cmd.MediaMs)
+	case "clock_probe":
+		return rooms.Snapshot{}, nil // No mutation; reply after releasing Hub.mu.
+	default:
+		return rooms.Snapshot{}, errors.New("command not supported")
+	}
 }
 
 func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
@@ -405,13 +445,12 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			p.send(map[string]string{"type": "error", "code": "invalid_message"})
 			continue
 		}
-		// A superseded socket is no longer authorized to mutate room state.
-		if !h.isCurrent(p) {
+		snap, err := h.applyCommand(p, cmd)
+		if errors.Is(err, errSuperseded) {
 			diagnostic.Warn("websocket.session_superseded")
 			return
 		}
-		// Revalidate access on EVERY command: REST Leave/expiry revokes WS authority.
-		if _, err := h.Store.Authorize(p.roomID, p.token); err != nil {
+		if errors.Is(err, rooms.ErrUnauthorized) || errors.Is(err, rooms.ErrNotFound) {
 			diagnostic.Warn("websocket.session_revoked")
 			p.send(map[string]string{"type": "error", "code": "unauthorized"})
 			return
@@ -425,28 +464,21 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			s1 := h.Store.ServerMs()
 			p.send(map[string]any{"type": "clock_reply", "probeId": cmd.ProbeID, "c0": cmd.C0, "s1": s1, "s2": h.Store.ServerMs(), "clockEpoch": h.Store.ClockEpoch()})
 		case "track":
-			_, err = h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
 			if err == nil {
 				diagnostic.Info("playback.track_changed", "duration_ms", cmd.DurationMs)
-				h.cancelTimer(p.roomID)
 				h.Broadcast(p.roomID)
 			}
 		case "ready":
-			_, err = h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
 			if err == nil {
 				diagnostic.Info("playback.readiness_changed", "ready", cmd.Ready)
 				h.Broadcast(p.roomID)
 			}
 		case "schedule":
-			var snap rooms.Snapshot
-			snap, err = h.Store.Schedule(p.roomID, p.token, cmd.Action, cmd.MediaMs)
 			if err == nil {
 				diagnostic.Info("playback.scheduled", "action", cmd.Action, "event_id", snap.Playback.Pending.ID, "track_generation", snap.Playback.TrackGeneration)
 				h.Broadcast(p.roomID)
 				h.scheduleTimer(p.roomID, snap)
 			}
-		default:
-			err = errors.New("command not supported")
 		}
 		if err != nil {
 			diagnostic.Warn("websocket.operation_rejected", "reason", errorCode(err), "action", cmd.Type)
