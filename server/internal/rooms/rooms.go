@@ -97,7 +97,7 @@ type room struct {
 	operations     map[string]controlReceipt
 	operationOrder []string
 	armingAcks     map[string]bool       // per-member acknowledgements for the current playing event
-	cancellation   *cancellationReceipt // Latest canceled pending event; bounded per room.
+	cancellation   *cancellationReceipt  // Latest canceled pending event; bounded per room.
 	members        map[string]membership // Key is an unpredictable session token.
 }
 
