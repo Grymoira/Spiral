@@ -26,6 +26,7 @@ const QSet<QString> &approvedEvents() {
         QStringLiteral("client.authenticated"), QStringLiteral("client.clock_calibrated"),
         QStringLiteral("client.clock_expired"), QStringLiteral("client.track_shared"),
         QStringLiteral("client.scheduled_command"), QStringLiteral("client.playback_executed"),
+        QStringLiteral("client.playback_deferred"), QStringLiteral("client.playback_skipped"),
         QStringLiteral("client.protocol_error"), QStringLiteral("client.room_error")
     };
     return events;

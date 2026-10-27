@@ -216,3 +216,24 @@ conflict errors. The Qt client serializes controls pending command_ack and
 retries in-flight IDs on reconnect. This changes the host control wire
 contract; incompatible older clients must upgrade. No audio relay or acoustic
 accuracy work is implied.
+
+## Pending playback timer recovery — 2026-10-27
+
+Issue #28: the Qt client now distinguishes one-shot pending events that are
+armed, deferred due to unavailable media/clock/readiness, and already handled.
+When an appointment cannot execute, the timer is disarmed and the deferred
+event remains eligible only while the authoritative room still advertises the
+same track-generation/event ID. On recovery, the client checks the current
+recording and the member's authoritative Ready state before re-arming. No
+previously executed event may play twice, and canceled/replaced events cannot
+be resurrected by an old timer callback.
+
+A playing-state appointment more than 250 ms late is conservatively skipped;
+the local player pauses until a committed snapshot can reconcile playback.
+A pending pause is still applied late when media becomes usable. This is a
+safety threshold for avoiding late playback, **not** a claim of 250 ms acoustic
+synchronization accuracy.
+
+CI exercises the actual shipped QML functions under deterministic fake timer,
+media, clock, Ready and snapshot conditions. Physical Qt multimedia/device
+testing and true acoustic end-to-end timing remain outstanding (see #11).

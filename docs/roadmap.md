@@ -36,3 +36,13 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       once multi-device audio reliability is demonstrated.
 - [ ] Strengthen public deployment security (identity/rate limits, reverse proxy,
       abuse testing, secret rotation and operational incident controls).
+
+## 2026-10-27: pending one-shot recovery hardening
+
+- [x] Track locally armed/deferred/handled pending events separately and retry
+      safe recoverable events after media, clock and readiness become usable.
+- [x] Do not replay a completed, replaced or withdrawn pending event; fail
+      conservatively on substantially late playing-state deadlines.
+- [ ] Validate callback behavior with real Qt multimedia backends, buffering
+      transitions and two physical machines; CI QML timer fakes alone do not
+      demonstrate synchronized acoustic playback (see #11).
