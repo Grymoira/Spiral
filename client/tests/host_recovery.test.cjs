@@ -18,10 +18,10 @@ for (let i = begin; i < qml.length; ++i) {
 }
 assert.ok(source, "unterminated member removal action");
 
-function setup() {
+function setup(responseStatus = 204) {
     const calls = [], events = [];
     function XHR() {
-        const request = {method:"", url:"", headers:{}, readyState:0, status:204};
+        const request = {method:"", url:"", headers:{}, readyState:0, status:responseStatus};
         request.open = function(method, url) { this.method = method; this.url = url; };
         request.setRequestHeader = function(key, value) {this.headers[key] = value;};
         request.send = function() {
@@ -35,6 +35,7 @@ function setup() {
     const ctx = {
         authenticated:true, memberRole:"host", memberId:"host-id", memberToken:"secret-bearer",
         roomId:"room-id", serverUrl:"http://127.0.0.1:8787", logText:"",
+        removingGuestId:"", removalFeedback:"", roomSessionGeneration:1,
         syncTools:{
             validatedServerBase: url => url,
             logEvent: e => events.push(e),
@@ -70,15 +71,13 @@ function setup() {
     assert.equal(calls.length,0,"QML sent a removal request without host eligibility");
 }
 {
-    const {ctx,calls,events}=setup();
+    const {ctx,calls,events}=setup(403);
     ctx.removeGuest("guest-id");
-    const request=calls[0];
-    request.status=403;
-    request.onreadystatechange();
+    assert.equal(calls.length,1);
     assert.match(ctx.logText,/HTTP 403/);
     assert.ok(events.includes("client.room_error"));
     assert.ok(!ctx.logText.includes("secret-bearer"),"authorization leaked into error");
 }
-assert.match(qml,/onClicked:window\.removeGuest\(modelData\.id\)/,
+assert.match(qml,/onClicked:window\.confirmGuestRemoval\(modelData\.id\)/,
     "host recovery action is not wired into shipping member UI");
 console.log("QML host-only stuck-member recovery regressions passed");

@@ -60,6 +60,12 @@ ApplicationWindow {
     property int lastCorrectionMs: -100000
     property bool userJoining: false
     property var pendingControl: null
+    // Server acceptance is not scheduled execution or measured audible output.
+    property string controlFeedback: ""
+    property string removingGuestId: ""
+    property string removalFeedback: ""
+    // A confirmation must never cross a room-session boundary.
+    property int roomSessionGeneration: 0
 
     function endpoint(path) { return serverUrl.replace(/\/+$/, "") + path }
     function send(message) {
@@ -69,12 +75,71 @@ ApplicationWindow {
     function submitControl(command) {
         if (pendingControl || !roomState || !roomState.stateRevision) {
             logText = "Waiting for room state or previous command acknowledgement"
-            return
+            controlFeedback = "A previous command is pending, or room state is unavailable"
+            return false
+        }
+        if (!authenticated || socket.status !== WebSocket.Open) {
+            controlFeedback = "Command not sent: reconnect before retrying"
+            return false
         }
         command.operationId = syncTools.newOperationId()
         command.expectedRevision = Number(roomState.stateRevision)
         pendingControl = command
+        controlFeedback = "Sending " + (command.type === "track" ? "track change" : command.action) +
+                          " to coordinator; awaiting acknowledgement…"
         send(command)
+        return true
+    }
+    // Correlate replies: delayed or unrelated messages cannot release a newer
+    // pending command. A WebSocket receipt never proves physical audio output.
+    function handleControlAck(msg) {
+        if (!pendingControl || msg.operationId !== pendingControl.operationId) return
+        var action = pendingControl.type === "track" ? "Track update" : pendingControl.action
+        pendingControl = null
+        controlFeedback = msg.applied === true
+                ? action + " accepted by coordinator; check authoritative room state (not audible output)"
+                : action + " acknowledged as a prior operation; check authoritative room state"
+    }
+    function handleControlError(msg) {
+        if (!pendingControl || msg.operationId !== pendingControl.operationId) return
+        pendingControl = null
+        var reasons = {
+            not_ready: "all room members must be ready",
+            cancellation_pending: "waiting for members to confirm a previous cancellation",
+            forbidden: "this session lacks host permission",
+            revision_conflict: "room state changed; review the latest state before retrying",
+            operation_conflict: "operation ID conflicts with an earlier request",
+            no_track: "select and share a room recording first",
+            invalid_state: "the current room state does not allow this action",
+            unauthorized: "session authorization expired; reconnect"
+        }
+        // Do not insert arbitrary untrusted error fields into the user interface.
+        controlFeedback = "Command rejected: " +
+                          (reasons[msg.code] || "server rejected the operation")
+    }
+    // Explain why a shared control is not yet usable. These are UI hints,
+    // not an alternative to the server's authoritative permission checks.
+    function hostControlHint() {
+        if (!roomId) return "Create or join a room to use shared playback controls."
+        if (!authenticated) return "Waiting for room authentication and connection."
+        if (memberRole !== "host") return "Only the room host can share or schedule playback."
+        if (pendingControl) return "Waiting for the previous coordinator acknowledgement."
+        if (!selectedHash) return "Select a local audio file to enable sharing and playback."
+        if (player.duration <= 0) return "Waiting for the selected recording to load its duration."
+        if (!clockReady) return "Calibrating the room clock; scheduled controls are unavailable."
+        if (!sameRecording()) return "Share the selected recording and wait for matching room metadata."
+        return "Host controls available; all room members must still be Ready before play is accepted."
+    }
+    // QMediaPlayer state is observable UI feedback, not evidence of sound output.
+    function localPlaybackStatus() {
+        if (mediaFaulted) return "Local player error: reselect the audio file to retry."
+        if (!selectedHash) return "Local player: no recording selected."
+        if (player.playbackState === MediaPlayer.PlayingState)
+            return "Local player reports Playing; audible output has not been verified."
+        if (player.playbackState === MediaPlayer.PausedState)
+            return "Local player reports Paused."
+        if (!mediaLoaded()) return "Local player is loading or the recording is unavailable."
+        return "Local player ready; playback is not running."
     }
     function request(method, path, payload, done) {
         var base = syncTools.validatedServerBase(serverUrl)
@@ -97,6 +162,9 @@ ApplicationWindow {
             logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"
             return
         }
+        roomSessionGeneration++
+        removingGuestId = ""
+        removalFeedback = ""
         roomId = credentials.roomId
         memberId = credentials.memberId
         memberToken = credentials.sessionToken
@@ -119,6 +187,7 @@ ApplicationWindow {
         readySentKey = ""
         roomState = ({})
         pendingControl = null
+        controlFeedback = ""
         socket.url = wsUrl
         socket.active = true
         logText = "Connecting real-time room…"
@@ -128,6 +197,7 @@ ApplicationWindow {
         var base = syncTools.validatedServerBase(addressField.text)
         if (!base) { logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"; return }
         serverUrl = base
+        logText = "Creating room… awaiting server response"
         request("POST", "/v1/rooms", {}, function(body, err) {
             if (err) { syncTools.logEventLevel("client.protocol_error", "WARN"); logText = "Create failed: " + err; return }
             syncTools.logEvent("client.room_created")
@@ -142,6 +212,7 @@ ApplicationWindow {
         var target = roomField.text.trim()
         var invitation = inviteField.text.trim()
         if (!target || !invitation) { logText = "Room ID and invitation required"; return }
+        logText = "Joining room… awaiting server response"
         request("POST", "/v1/rooms/" + encodeURIComponent(target) + "/join",
                 {inviteCode: invitation}, function(body, err) {
             if (err) { syncTools.logEventLevel("client.protocol_error", "WARN"); logText = "Join failed: " + err; return }
@@ -149,42 +220,99 @@ ApplicationWindow {
             connectRoom(body)
         })
     }
-    // Host-controlled fail-closed recovery for a member that cannot ACK a
-    // cancellation. Server authorization is authoritative; the target's old
-    // socket is revoked, and the room is paused before a fresh ARM is possible.
+    // Confirm deliberate host-only revocation against the current member
+    // snapshot. The Go server still performs final authority checks.
+    function canRemoveGuest(targetId) {
+        if (!authenticated || memberRole !== "host" || !roomId ||
+                !targetId || targetId === memberId || removingGuestId !== "") return false
+        var members = roomState.members || []
+        for (var i = 0; i < members.length; i++) {
+            if (members[i].id === targetId && members[i].role !== "host")
+                return true
+        }
+        return false
+    }
+    function confirmGuestRemoval(targetId) {
+        if (!canRemoveGuest(targetId)) {
+            removalFeedback = "Cannot remove member: check connection, host role and current member list"
+            return false
+        }
+        guestRemovalDialog.targetMemberId = targetId
+        guestRemovalDialog.originRoomId = roomId
+        guestRemovalDialog.originSession = roomSessionGeneration
+        guestRemovalDialog.open()
+        return true
+    }
+    function approveGuestRemoval(targetId, originRoomId, originSession) {
+        if (roomId !== originRoomId || roomSessionGeneration !== originSession ||
+                !canRemoveGuest(targetId)) {
+            removalFeedback = "Member removal canceled: room membership changed"
+            return false
+        }
+        removeGuest(targetId)
+        return true
+    }
+    // Host-controlled fail-closed recovery from missing cancellation ACKs.
+    // Request state is separate from the synchronized playback protocol.
     function removeGuest(targetId) {
         if (!authenticated || memberRole !== "host" || !roomId ||
-                !targetId || targetId === memberId) return
+                !targetId || targetId === memberId || removingGuestId !== "") return
         var base = syncTools.validatedServerBase(serverUrl)
-        if (!base) { logText = "Server address rejected"; return }
+        if (!base) {
+            removalFeedback = "Member removal not sent: invalid server address"
+            return
+        }
         var originalRoom = roomId
         var token = memberToken
+        var session = roomSessionGeneration
+        removingGuestId = targetId
+        removalFeedback = "Removing member… waiting for coordinator response"
         var req = new XMLHttpRequest()
         req.onreadystatechange = function() {
             if (req.readyState !== XMLHttpRequest.DONE ||
-                    roomId !== originalRoom || memberToken !== token) return
+                    roomId !== originalRoom || memberToken !== token ||
+                    roomSessionGeneration !== session ||
+                    removingGuestId !== targetId) return
+            removingGuestId = ""
             if (req.status === 204) {
                 syncTools.logEvent("client.member_removed")
                 logText = "Member removed. Playback remains paused until every remaining member is Ready"
+                removalFeedback = "Member removal accepted; waiting for updated room state"
             } else {
                 syncTools.logEventLevel("client.room_error", "WARN")
                 logText = "Unable to remove member (HTTP " + req.status + ")"
+                removalFeedback = req.status === 0
+                        ? "Removal outcome unknown (network failure); check room state before retrying"
+                        : "Member removal rejected (HTTP " + req.status + "); check status before retrying"
             }
         }
-        req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) +
-                 "/members/" + encodeURIComponent(targetId))
-        req.setRequestHeader("Authorization", "Bearer " + token)
-        req.send()
+        try {
+            req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) +
+                     "/members/" + encodeURIComponent(targetId))
+            req.setRequestHeader("Authorization", "Bearer " + token)
+            req.send()
+        } catch (e) {
+            if (roomSessionGeneration === session && removingGuestId === targetId) {
+                removingGuestId = ""
+                removalFeedback = "Member removal outcome unknown; check room state before retrying"
+                syncTools.logEventLevel("client.room_error", "WARN")
+            }
+        }
     }
     function leaveRoom() {
         var originalRoom = roomId
         var token = memberToken
+        roomSessionGeneration++
+        removingGuestId = ""
+        removalFeedback = ""
+        guestRemovalDialog.close()
         socket.active = false
         authenticated = false
         roomId = ""
         memberToken = ""
         roomState = ({})
         pendingControl = null
+        controlFeedback = ""
         scheduledKey = ""
         deferredPendingKey = ""
         finishedPendingKey = ""
@@ -400,8 +528,8 @@ ApplicationWindow {
             logText = "This recording is already shared; use an explicit reload to reset readiness"
             return
         }
-        submitControl({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration)})
-        syncTools.logEvent("client.track_shared")
+        if (submitControl({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration)}))
+            syncTools.logEvent("client.track_shared")
     }
     function reloadTrack() {
         if (memberRole !== "host" || !authenticated || !selectedHash || player.duration <= 0) return
@@ -417,8 +545,8 @@ ApplicationWindow {
             logText = "Host connection and a calibrated clock are required"
             return
         }
-        submitControl({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
-        syncTools.logEvent("client.scheduled_command")
+        if (submitControl({type:"schedule", action:action, mediaMs:Math.round(ms || 0)}))
+            syncTools.logEvent("client.scheduled_command")
     }
     // The server's latest cancellation is a cumulative revision watermark:
     // acknowledging it means this client has reconciled ALL earlier retired
@@ -698,6 +826,26 @@ ApplicationWindow {
         nameFilters: ["Audio files (*.wav *.flac *.mp3 *.ogg *.m4a)", "All files (*)"]
         onAccepted: window.selectFile(selectedFile)
     }
+    Dialog {
+        id: guestRemovalDialog
+        modal: true
+        title: "Remove room member?"
+        width: Math.min(window.width - 48, 440)
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        property string targetMemberId: ""
+        property string originRoomId: ""
+        property int originSession: -1
+        contentItem: Label {
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Remove member " + guestRemovalDialog.targetMemberId.substring(0, 10) +
+                  " from this room? Their session will be revoked and coordinated playback paused. " +
+                  "A new invitation may be required to rejoin."
+        }
+        onAccepted: window.approveGuestRemoval(targetMemberId, originRoomId, originSession)
+        onRejected: window.removalFeedback = "Member removal canceled; no request sent"
+    }
     WebSocket {
         id: socket
         active: false
@@ -709,6 +857,8 @@ ApplicationWindow {
                                                       sessionToken:window.memberToken}))
             } else if (status === WebSocket.Error || status === WebSocket.Closed) {
                 syncTools.logEventLevel("client.websocket_closed", "WARN")
+                if (window.pendingControl)
+                    window.controlFeedback = "Connection lost; command outcome unknown. Reconnecting with the same operation ID…"
                 window.authenticated = false
                 window.clockReady = false
                 window.lastAuthorityReplyMs = -1
@@ -746,7 +896,10 @@ ApplicationWindow {
                 window.probeClock()
                 // Resend the same operation ID after reconnect; never create a
                 // second event if the first command was already accepted.
-                if (window.pendingControl) window.send(window.pendingControl)
+                if (window.pendingControl) {
+                    window.controlFeedback = "Reconnected; retrying the pending command with the same operation ID…"
+                    window.send(window.pendingControl)
+                }
                 window.logText = "Room connected. Calibrating server clock…"
             } else if (msg.type === "clock_reply") window.receiveClock(msg)
             else if (msg.type === "snapshot") {
@@ -792,13 +945,9 @@ ApplicationWindow {
                 if (window.cancellationAckKey === ack)
                     window.cancellationAckConfirmedKey = ack
             } else if (msg.type === "command_ack") {
-                if (window.pendingControl && msg.operationId === window.pendingControl.operationId) {
-                    window.pendingControl = null
-                }
+                window.handleControlAck(msg)
             } else if (msg.type === "error") {
-                if (window.pendingControl && msg.operationId === window.pendingControl.operationId) {
-                    window.pendingControl = null
-                }
+                window.handleControlError(msg)
                 syncTools.logEventLevel("client.room_error", "WARN")
                 window.logText = msg.code === "cancellation_pending"
                         ? "Waiting for room members to confirm previous cancellation"
@@ -807,6 +956,24 @@ ApplicationWindow {
         }
     }
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
+    Timer {
+        interval: 8000
+        repeat: false
+        running: window.removingGuestId !== ""
+        onTriggered: {
+            if (window.removingGuestId !== "")
+                window.removalFeedback = "No response yet; removal outcome unknown. Avoid duplicate requests."
+        }
+    }
+    Timer {
+        interval: 8000
+        running: window.pendingControl !== null
+        repeat: false
+        onTriggered: {
+            if (window.pendingControl)
+                window.controlFeedback = "No acknowledgement yet; the request remains pending to prevent duplicates"
+        }
+    }
     Timer { interval: 500; running: true; repeat: true; onTriggered: {
         window.safeguardAuthority()
         window.requestWakeSnapshot()
@@ -888,10 +1055,38 @@ ApplicationWindow {
                             Button {
                                 text:"Remove member"
                                 visible: window.memberRole === "host" && modelData.role !== "host"
-                                enabled: window.authenticated
-                                onClicked:window.removeGuest(modelData.id)
+                                enabled: window.authenticated && window.removingGuestId === ""
+                                onClicked:window.confirmGuestRemoval(modelData.id)
                             }
                         }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        BusyIndicator {
+                            visible: window.removingGuestId !== ""
+                            running: visible
+                            implicitWidth: 24
+                            implicitHeight: 24
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            textFormat: Text.PlainText
+                            color: window.secondary
+                            text: window.removalFeedback
+                            visible: text !== ""
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.roomId === "" ? "Join a room to manage its members."
+                                : window.memberRole !== "host" ? "Only the room host can remove members."
+                                : window.removingGuestId !== "" ? "A member removal is in progress."
+                                : ""
+                        visible: text !== ""
                     }
                 }
             }
@@ -908,6 +1103,13 @@ ApplicationWindow {
                         Button { text:"Host: share track"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.shareTrack() }
                         Button { text:"Host: reload"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.reloadTrack() }
                     }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.hostControlHint()
+                    }
                     Label { Layout.fillWidth:true; color:window.secondary; wrapMode:Text.WrapAnywhere; text:"Room track SHA-256: " + (window.roomState.playback && window.roomState.playback.trackId ? window.roomState.playback.trackId : "not selected") }
                     Label { color:window.sameRecording() ? "#83d9ae" : window.secondary; text: window.sameRecording() ? "Local file matches room recording" : "Local file not yet matched" }
                     Slider { id:progress; Layout.fillWidth:true; from:0; to:Math.max(1,player.duration); value:player.position; enabled:player.seekable && !window.pendingControl
@@ -918,7 +1120,52 @@ ApplicationWindow {
                         Item { Layout.fillWidth:true }
                         Button { text:"Play together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady && window.sameRecording(); onClicked:window.roomCommand("play",0) }
                         Button { text:"Pause together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady; onClicked:window.roomCommand("pause",0) }
-                        Button { text:"Local play"; enabled:window.roomId==="" && window.selectedHash!==""; onClicked:player.play() }
+                        Button {
+                            text: "Local play"
+                            enabled: window.roomId === "" && window.selectedHash !== ""
+                            onClicked: {
+                                window.logText = "Local playback requested; waiting for media backend state"
+                                player.play()
+                            }
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.localPlaybackStatus()
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        BusyIndicator {
+                            visible: window.pendingControl !== null
+                            running: visible
+                            implicitWidth: 24
+                            implicitHeight: 24
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            textFormat: Text.PlainText
+                            color: window.secondary
+                            text: window.controlFeedback
+                            visible: text !== ""
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: !window.roomState.playback ? "Coordinator playback state unavailable"
+                                : "Coordinator: " + window.roomState.playback.playState +
+                                  (window.roomState.playback.pending
+                                   ? (window.roomState.playback.pending.phase === "arming"
+                                      ? " · awaiting member ACKs (not yet scheduled)"
+                                      : " · scheduled action pending")
+                                   : " · no pending action") +
+                                  " · not an acoustic-output measurement"
                     }
                 }
             }
