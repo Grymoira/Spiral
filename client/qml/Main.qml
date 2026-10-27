@@ -24,6 +24,9 @@ ApplicationWindow {
     property string memberRole: ""
     property string memberId: ""
     property string selectedHash: ""
+    // A Qt Multimedia decoding/output error must not be interpreted as
+    // temporary buffering; require explicit file selection to retry it.
+    property bool mediaFaulted: false
     property var roomState: ({})
     property string logText: "Select a local test audio file, then create or join a room."
     property bool authenticated: false
@@ -293,8 +296,9 @@ ApplicationWindow {
                 && roomState.playback.trackId === selectedHash
     }
     function mediaLoaded() {
-        return player.mediaStatus === MediaPlayer.LoadedMedia
-                || player.mediaStatus === MediaPlayer.BufferedMedia
+        return !mediaFaulted &&
+                (player.mediaStatus === MediaPlayer.LoadedMedia ||
+                 player.mediaStatus === MediaPlayer.BufferedMedia)
     }
     // Qt may report StalledMedia/LoadingMedia while playbackState is still
     // PlayingState. Readiness withdrawal alone is insufficient: stop the
@@ -352,6 +356,7 @@ ApplicationWindow {
     function selectFile(url) {
         revokeReady()
         player.pause()
+        mediaFaulted = false
         selectedHash = syncTools.sha256File(url)
         if (!selectedHash) { syncTools.logEventLevel("client.file_rejected", "WARN"); logText = "Could not hash selected file"; return }
         player.source = url
@@ -629,7 +634,14 @@ ApplicationWindow {
     MediaPlayer {
         id: player
         audioOutput: AudioOutput { volume: 0.65 }
-        onErrorOccurred: function(error, errorString) { syncTools.logEventLevel("client.media_error", "ERROR"); window.logText = "Audio error: " + errorString }
+        onErrorOccurred: function(error, errorString) {
+            // Some backends emit an error without leaving BufferedMedia.
+            // A faulted pipeline must stop even if mediaStatus looks usable.
+            window.mediaFaulted = true
+            window.handleMediaStatusChanged()
+            syncTools.logEventLevel("client.media_error", "ERROR")
+            window.logText = "Audio error: select the local file again to retry"
+        }
         onMediaStatusChanged: window.handleMediaStatusChanged()
         onDurationChanged: window.maybeReady()
     }
