@@ -28,6 +28,7 @@ const QSet<QString> &approvedEvents() {
         QStringLiteral("client.scheduled_command"), QStringLiteral("client.playback_executed"),
         QStringLiteral("client.playback_deferred"), QStringLiteral("client.playback_skipped"),
         QStringLiteral("client.authority_stale"),
+        QStringLiteral("client.clock_discontinuity"),
         QStringLiteral("client.protocol_error"), QStringLiteral("client.room_error")
     };
     return events;
@@ -36,11 +37,16 @@ const QSet<QString> &approvedEvents() {
 
 SyncTools::SyncTools(QObject *parent) : QObject(parent) {
     clock_.start();
+    clockContinuity_.observe(clock_.elapsed(), QDateTime::currentMSecsSinceEpoch());
     sessionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
     logEvent(QStringLiteral("client.started"));
 }
 
 qint64 SyncTools::monotonicMs() const { return clock_.elapsed(); }
+
+bool SyncTools::clockContinuityOk() {
+    return clockContinuity_.observe(clock_.elapsed(), QDateTime::currentMSecsSinceEpoch());
+}
 
 QString SyncTools::newOperationId() const {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
