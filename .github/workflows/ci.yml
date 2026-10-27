@@ -68,7 +68,7 @@ jobs:
         run: node client/tests/cancellation_receipt.test.cjs
       - name: Transport URL and redirect security regressions
         run: |
-          ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy
+          ctest --test-dir build/dev --output-on-failure -R 'spiral-(transport-policy|clock-continuity)'
           node client/tests/transport_gate.test.cjs
       - name: Headless QML startup smoke test
         run: |
