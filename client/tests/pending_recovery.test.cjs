@@ -46,6 +46,7 @@ function scenario() {
         }, members: [{id: "owner", ready: true}]},
         selectedHash: hash, memberId: "owner",
         scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
+        wakeSnapshotId: "", wakeSnapshotLastSentMs: -1,
         maxLatePlayMs: 250, lastCorrectionMs: -100000,
         player, playbackTimer: timer,
         MediaPlayer: {LoadedMedia: 1, BufferedMedia: 2, PlayingState: 2},
