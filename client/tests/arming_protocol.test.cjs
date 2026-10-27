@@ -32,6 +32,7 @@ function scene() {
     const context = {
         authenticated:true, clockReady:true, clockOffsetMs:0, lastAuthorityReplyMs:0, authorityStaleAfterMs:1000000, selectedHash:hash,
         memberId:"guest", armSentKey:"", scheduledKey:"", deferredPendingKey:"",
+        wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
         finishedPendingKey:"", maxLatePlayMs:250, lastCorrectionMs:-100000,
         socket:{status:1}, WebSocket:{Open:1}, send:m=>sent.push(m),
         roomState: {playback: {trackId:hash, trackGeneration:1,
