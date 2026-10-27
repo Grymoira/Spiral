@@ -32,6 +32,8 @@ def generate_click_track(
     first_click = sample_rate  # one second of lead-in silence
     step = round(spacing_ms * sample_rate / 1000)
     frames = first_click + (clicks - 1) * step + pulse_samples + sample_rate
+    if frames / sample_rate > MAX_RECORD_SECONDS:
+        raise ValueError("generated track exceeds 600 seconds")
     output.parent.mkdir(parents=True, exist_ok=True)
     with wave.open(str(output), "wb") as wav:
         wav.setnchannels(1)
@@ -176,11 +178,14 @@ def analyze(
     if source_claim == "synthetic":
         warnings.append("Synthetic capture is a unit test, NEVER physical acoustic evidence")
     measures = None
+    raw_limits_values = None
     if deltas:
+        raw_limits_values = (percentile(abs_deltas, 0.50),
+                             percentile(abs_deltas, 0.95), max(abs_deltas))
         measures = {
-            "p50_absolute_ms": round(percentile(abs_deltas, 0.50), 3),
-            "p95_absolute_ms": round(percentile(abs_deltas, 0.95), 3),
-            "max_absolute_ms": round(max(abs_deltas), 3),
+            "p50_absolute_ms": round(raw_limits_values[0], 3),
+            "p95_absolute_ms": round(raw_limits_values[1], 3),
+            "max_absolute_ms": round(raw_limits_values[2], 3),
             "median_signed_right_minus_left_ms": round(statistics.median(deltas), 3),
         }
     verdict = "INCOMPLETE"
@@ -188,9 +193,10 @@ def analyze(
         if limits is None:
             verdict = "MEASURED_NO_PREDECLARED_LIMITS"
         else:
-            within = (measures["p50_absolute_ms"] <= limits[0]
-                      and measures["p95_absolute_ms"] <= limits[1]
-                      and measures["max_absolute_ms"] <= limits[2])
+            # Compare unrounded measurements: formatting must never turn a
+            # genuine threshold exceedance into a favorable verdict.
+            within = all(measured <= bound for measured, bound in
+                         zip(raw_limits_values, limits))
             verdict = "WITHIN_CONFIGURED_LIMITS" if within else "OUTSIDE_CONFIGURED_LIMITS"
     return {
         "schema_version": 1,
