@@ -14,7 +14,7 @@ function getFunc(name) {
 const sent=[];
 const ctx={
  roomState:{stateRevision:7,playback:{trackId:"",durationMs:0}},
- selectedHash:"a".repeat(64),memberRole:"host",authenticated:true,roomId:"room",
+ selectedHash:"a".repeat(64),memberRole:"host",authenticated:true,clockReady:true,roomId:"room",
  player:{duration:30000},pendingControl:null,logText:"",
  syncTools:{newOperationId:()=> "client-op-001",logEvent:()=>{}},
  socket:{status:1,sendTextMessage:data=>sent.push(JSON.parse(data))},
