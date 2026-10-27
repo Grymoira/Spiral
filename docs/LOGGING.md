@@ -53,3 +53,10 @@ operational telemetry suite: durable audit storage, deployment-level anti-abuse,
 metrics/tracing, secure incident response, and detailed acoustic measurements
 are not implemented. Chat and danmaku (bullet-screen messages) remain deferred
 until the core multi-device audio experience has been measured and hardened.
+
+## Issue #11 host recovery event codes
+
+An authenticated manual guest removal emits the fixed REST route label
+`rooms.member_remove` (not a dynamic room/member identifier). A successful
+desktop host action emits `client.member_removed`. Both use the existing
+redacted event schema and never expose credentials or member IDs.
