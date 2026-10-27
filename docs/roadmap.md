@@ -177,3 +177,17 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       on physical clients with separate network links.
 - [ ] Obtain actual two-device capture evidence and approved onset, pause,
       seek and track-change acceptance criteria. Keep #11 OPEN.
+
+## Issue #11 phase 9 — host-controlled recovery for nonresponding member
+
+- [x] Add an authenticated host-only removal endpoint, with revocation,
+      suspended playback and retired old pending COMMIT before membership loss.
+- [x] Keep the missing-cancellation barrier unless remaining members have
+      ACKed; removal never fabricates an ACK.
+- [x] Provide a member-specific host UI action and privacy-preserving logs.
+- [x] Cover unauthorized callers, self-targets, repeat removal, revoked
+      credentials, stale COMMIT and authorization recovery in software tests.
+- [ ] Test a truly partitioned removed guest and measure how long its audio
+      persists (if at all) before its watchdog stops it.
+- [ ] Complete two-device Qt physical evidence and reviewed acoustic limits
+      before closing #11.
