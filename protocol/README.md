@@ -73,13 +73,13 @@ deployed with deliberate source attribution and edge controls.
 ### Required WebSocket message fields
 
 Each client command requires **all fields shown in its JSON example** above.
-The exact names and JSON types are mandatory: \`auth\` requires \`type\`,
-\`roomId\`, \`sessionToken\`; \`clock_probe\` requires \`type\`, \`probeId\`, \`c0\`;
-\`track\` requires \`type\`, \`sha256\`, \`durationMs\`; \`ready\` requires
-\`type\`, \`trackId\`, \`trackGeneration\`, \`ready\`; and \`schedule\` requires
-\`type\`, \`action\`, \`mediaMs\`. Missing, \`null\`, wrongly typed, duplicated,
-or command-inappropriate fields are rejected with \`invalid_message\`.
-Intentional scalar zero values retain their meaning: \`ready:false\`,
-\`mediaMs:0\`, and \`c0:0\` are accepted if the rest of the command is valid.
+The exact names and JSON types are mandatory: `auth` requires `type`,
+`roomId`, `sessionToken`; `clock_probe` requires `type`, `probeId`, `c0`;
+`track` requires `type`, `sha256`, `durationMs`; `ready` requires
+`type`, `trackId`, `trackGeneration`, `ready`; and `schedule` requires
+`type`, `action`, `mediaMs`. Missing, `null`, wrongly typed, duplicated,
+or command-inappropriate fields are rejected with `invalid_message`.
+Intentional scalar zero values retain their meaning: `ready:false`,
+`mediaMs:0`, and `c0:0` are accepted if the rest of the command is valid.
 Domain-specific validation (such as track identity, duration and permissions)
 still follows parsing and returns its existing operation error codes.

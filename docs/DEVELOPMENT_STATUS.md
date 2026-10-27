@@ -192,14 +192,14 @@ it is not a background sweep.
 ## Strict real-time message contract — 2026-10-27
 
 Issue #6: the WebSocket envelope parser now requires every field defined by
-the individual command schema to be present and non-\`null\`. Previously,
-missing or \`null\` JSON scalars decoded to Go zero values (notably
-\`ready:false\` and \`mediaMs:0\`), potentially mutating authoritative room
+the individual command schema to be present and non-`null`. Previously,
+missing or `null` JSON scalars decoded to Go zero values (notably
+`ready:false` and `mediaMs:0`), potentially mutating authoritative room
 state. Exact field names, duplicate detection, type checking, and
 command-specific allowed fields continue to use the existing parser;
-valid \`ready:false\`, \`mediaMs:0\`, and \`c0:0\` retain their original meaning.
+valid `ready:false`, `mediaMs:0`, and `c0:0` retain their original meaning.
 
 Regression tests enumerate missing/null for every required field, malformed
 types, unexpected/duplicated fields and valid zero values. A real two-way
-WebSocket test verifies rejected packets return \`invalid_message\` without
+WebSocket test verifies rejected packets return `invalid_message` without
 changing state revision, readiness or pending playback.

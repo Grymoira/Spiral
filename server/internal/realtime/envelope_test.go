@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"encoding/json"
+	"sort"
 	"testing"
 )
 
@@ -36,7 +37,15 @@ func TestStrictEnvelopeRequiredFieldsAndNulls(t *testing.T) {
 			if err := json.Unmarshal([]byte(tc.data), &raw); err != nil {
 				t.Fatal(err)
 			}
-			for key, original := range raw {
+			// Snapshot the key set before mutating the map. Go map iteration
+			// is intentionally unordered; verify every required field.
+			keys := make([]string, 0, len(raw))
+			for key := range raw {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
+				original := raw[key]
 				delete(raw, key)
 				missing, err := json.Marshal(raw)
 				if err != nil {
