@@ -35,6 +35,7 @@ function setup() {
     const ctx = {
         authenticated:true, memberRole:"host", memberId:"host-id", memberToken:"secret-bearer",
         roomId:"room-id", serverUrl:"http://127.0.0.1:8787", logText:"",
+        removingGuestId:"", removalFeedback:"", roomSessionGeneration:1,
         syncTools:{
             validatedServerBase: url => url,
             logEvent: e => events.push(e),
@@ -79,6 +80,6 @@ function setup() {
     assert.ok(events.includes("client.room_error"));
     assert.ok(!ctx.logText.includes("secret-bearer"),"authorization leaked into error");
 }
-assert.match(qml,/onClicked:window\.removeGuest\(modelData\.id\)/,
+assert.match(qml,/onClicked:window\.confirmGuestRemoval\(modelData\.id\)/,
     "host recovery action is not wired into shipping member UI");
 console.log("QML host-only stuck-member recovery regressions passed");

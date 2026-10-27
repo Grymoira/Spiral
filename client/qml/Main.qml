@@ -62,6 +62,10 @@ ApplicationWindow {
     property var pendingControl: null
     // Server acceptance is not scheduled execution or measured audible output.
     property string controlFeedback: ""
+    property string removingGuestId: ""
+    property string removalFeedback: ""
+    // A confirmation must never cross a room-session boundary.
+    property int roomSessionGeneration: 0
 
     function endpoint(path) { return serverUrl.replace(/\/+$/, "") + path }
     function send(message) {
@@ -134,6 +138,9 @@ ApplicationWindow {
             logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"
             return
         }
+        roomSessionGeneration++
+        removingGuestId = ""
+        removalFeedback = ""
         roomId = credentials.roomId
         memberId = credentials.memberId
         memberToken = credentials.sessionToken
@@ -189,36 +196,92 @@ ApplicationWindow {
             connectRoom(body)
         })
     }
-    // Host-controlled fail-closed recovery for a member that cannot ACK a
-    // cancellation. Server authorization is authoritative; the target's old
-    // socket is revoked, and the room is paused before a fresh ARM is possible.
+    // Confirm deliberate host-only revocation against the current member
+    // snapshot. The Go server still performs final authority checks.
+    function canRemoveGuest(targetId) {
+        if (!authenticated || memberRole !== "host" || !roomId ||
+                !targetId || targetId === memberId || removingGuestId !== "") return false
+        var members = roomState.members || []
+        for (var i = 0; i < members.length; i++) {
+            if (members[i].id === targetId && members[i].role !== "host")
+                return true
+        }
+        return false
+    }
+    function confirmGuestRemoval(targetId) {
+        if (!canRemoveGuest(targetId)) {
+            removalFeedback = "Cannot remove member: check connection, host role and current member list"
+            return false
+        }
+        guestRemovalDialog.targetMemberId = targetId
+        guestRemovalDialog.originRoomId = roomId
+        guestRemovalDialog.originSession = roomSessionGeneration
+        guestRemovalDialog.open()
+        return true
+    }
+    function approveGuestRemoval(targetId, originRoomId, originSession) {
+        if (roomId !== originRoomId || roomSessionGeneration !== originSession ||
+                !canRemoveGuest(targetId)) {
+            removalFeedback = "Member removal canceled: room membership changed"
+            return false
+        }
+        removeGuest(targetId)
+        return true
+    }
+    // Host-controlled fail-closed recovery from missing cancellation ACKs.
+    // Request state is separate from the synchronized playback protocol.
     function removeGuest(targetId) {
         if (!authenticated || memberRole !== "host" || !roomId ||
-                !targetId || targetId === memberId) return
+                !targetId || targetId === memberId || removingGuestId !== "") return
         var base = syncTools.validatedServerBase(serverUrl)
-        if (!base) { logText = "Server address rejected"; return }
+        if (!base) {
+            removalFeedback = "Member removal not sent: invalid server address"
+            return
+        }
         var originalRoom = roomId
         var token = memberToken
+        var session = roomSessionGeneration
+        removingGuestId = targetId
+        removalFeedback = "Removing member… waiting for coordinator response"
         var req = new XMLHttpRequest()
         req.onreadystatechange = function() {
             if (req.readyState !== XMLHttpRequest.DONE ||
-                    roomId !== originalRoom || memberToken !== token) return
+                    roomId !== originalRoom || memberToken !== token ||
+                    roomSessionGeneration !== session ||
+                    removingGuestId !== targetId) return
+            removingGuestId = ""
             if (req.status === 204) {
                 syncTools.logEvent("client.member_removed")
                 logText = "Member removed. Playback remains paused until every remaining member is Ready"
+                removalFeedback = "Member removal accepted; waiting for updated room state"
             } else {
                 syncTools.logEventLevel("client.room_error", "WARN")
                 logText = "Unable to remove member (HTTP " + req.status + ")"
+                removalFeedback = req.status === 0
+                        ? "Removal outcome unknown (network failure); check room state before retrying"
+                        : "Member removal rejected (HTTP " + req.status + "); check status before retrying"
             }
         }
-        req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) +
-                 "/members/" + encodeURIComponent(targetId))
-        req.setRequestHeader("Authorization", "Bearer " + token)
-        req.send()
+        try {
+            req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) +
+                     "/members/" + encodeURIComponent(targetId))
+            req.setRequestHeader("Authorization", "Bearer " + token)
+            req.send()
+        } catch (e) {
+            if (roomSessionGeneration === session && removingGuestId === targetId) {
+                removingGuestId = ""
+                removalFeedback = "Member removal outcome unknown; check room state before retrying"
+                syncTools.logEventLevel("client.room_error", "WARN")
+            }
+        }
     }
     function leaveRoom() {
         var originalRoom = roomId
         var token = memberToken
+        roomSessionGeneration++
+        removingGuestId = ""
+        removalFeedback = ""
+        guestRemovalDialog.close()
         socket.active = false
         authenticated = false
         roomId = ""
@@ -739,6 +802,26 @@ ApplicationWindow {
         nameFilters: ["Audio files (*.wav *.flac *.mp3 *.ogg *.m4a)", "All files (*)"]
         onAccepted: window.selectFile(selectedFile)
     }
+    Dialog {
+        id: guestRemovalDialog
+        modal: true
+        title: "Remove room member?"
+        width: Math.min(window.width - 48, 440)
+        anchors.centerIn: parent
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        property string targetMemberId: ""
+        property string originRoomId: ""
+        property int originSession: -1
+        contentItem: Label {
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "Remove member " + guestRemovalDialog.targetMemberId.substring(0, 10) +
+                  " from this room? Their session will be revoked and coordinated playback paused. " +
+                  "A new invitation may be required to rejoin."
+        }
+        onAccepted: window.approveGuestRemoval(targetMemberId, originRoomId, originSession)
+        onRejected: window.removalFeedback = "Member removal canceled; no request sent"
+    }
     WebSocket {
         id: socket
         active: false
@@ -851,6 +934,15 @@ ApplicationWindow {
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
     Timer {
         interval: 8000
+        repeat: false
+        running: window.removingGuestId !== ""
+        onTriggered: {
+            if (window.removingGuestId !== "")
+                window.removalFeedback = "No response yet; removal outcome unknown. Avoid duplicate requests."
+        }
+    }
+    Timer {
+        interval: 8000
         running: window.pendingControl !== null
         repeat: false
         onTriggered: {
@@ -939,10 +1031,38 @@ ApplicationWindow {
                             Button {
                                 text:"Remove member"
                                 visible: window.memberRole === "host" && modelData.role !== "host"
-                                enabled: window.authenticated
-                                onClicked:window.removeGuest(modelData.id)
+                                enabled: window.authenticated && window.removingGuestId === ""
+                                onClicked:window.confirmGuestRemoval(modelData.id)
                             }
                         }
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        BusyIndicator {
+                            visible: window.removingGuestId !== ""
+                            running: visible
+                            implicitWidth: 24
+                            implicitHeight: 24
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            textFormat: Text.PlainText
+                            color: window.secondary
+                            text: window.removalFeedback
+                            visible: text !== ""
+                        }
+                    }
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.Wrap
+                        textFormat: Text.PlainText
+                        color: window.secondary
+                        text: window.roomId === "" ? "Join a room to manage its members."
+                                : window.memberRole !== "host" ? "Only the room host can remove members."
+                                : window.removingGuestId !== "" ? "A member removal is in progress."
+                                : ""
+                        visible: text !== ""
                     }
                 }
             }
