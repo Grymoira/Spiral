@@ -296,6 +296,35 @@ ApplicationWindow {
         return player.mediaStatus === MediaPlayer.LoadedMedia
                 || player.mediaStatus === MediaPlayer.BufferedMedia
     }
+    // Qt may report StalledMedia/LoadingMedia while playbackState is still
+    // PlayingState. Readiness withdrawal alone is insufficient: stop the
+    // audio pipeline immediately and fence any old scheduled callback.
+    function handleMediaStatusChanged() {
+        if (!mediaLoaded()) {
+            player.pause()
+            playbackTimer.stop()
+            scheduledKey = ""
+            deferredPendingKey = ""
+            finishedPendingKey = ""
+            armSentKey = ""
+            if (authenticated && roomState.playback && roomState.playback.trackId) {
+                // The server may still have Ready=true even after a previous
+                // local key was cleared. A fresh authoritative snapshot after
+                // this Ready(false) must precede any resumed playback.
+                send({type:"ready", trackId:roomState.playback.trackId,
+                      trackGeneration:roomState.playback.trackGeneration, ready:false})
+                readySentKey = ""
+                if (!wakeSnapshotId && socket.status === WebSocket.Open) {
+                    wakeSnapshotId = syncTools.newOperationId()
+                    wakeSnapshotLastSentMs = -1
+                    requestWakeSnapshot()
+                }
+                syncTools.logEventLevel("client.media_unavailable", "WARN")
+            }
+        }
+        maybeReady()
+        reconcile()
+    }
     function ownReady() {
         var members = roomState.members || []
         for (var i = 0; i < members.length; ++i) {
@@ -601,7 +630,7 @@ ApplicationWindow {
         id: player
         audioOutput: AudioOutput { volume: 0.65 }
         onErrorOccurred: function(error, errorString) { syncTools.logEventLevel("client.media_error", "ERROR"); window.logText = "Audio error: " + errorString }
-        onMediaStatusChanged: { if (!window.mediaLoaded()) window.revokeReady(); window.maybeReady(); window.reconcile() }
+        onMediaStatusChanged: window.handleMediaStatusChanged()
         onDurationChanged: window.maybeReady()
     }
     FileDialog {
