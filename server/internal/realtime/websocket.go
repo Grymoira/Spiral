@@ -115,8 +115,7 @@ func (s *socket) readText() ([]byte, error) {
 				return nil, err
 			}
 			size = uint64(binary.BigEndian.Uint16(b[:]))
-		}
-		if size == 127 {
+		} else if size == 127 {
 			var b [8]byte
 			if _, err := io.ReadFull(s.reader, b[:]); err != nil {
 				return nil, err
