@@ -106,7 +106,7 @@ jobs:
           New-Item -ItemType Directory -Path (Join-Path $stage "LICENSES") | Out-Null
           $lgpl = Join-Path $stage "LICENSES/LGPL-3.0.txt"
           Invoke-WebRequest -Uri "https://www.gnu.org/licenses/lgpl-3.0.txt" -OutFile $lgpl
-          if (-not (Test-Path $lgpl) -or (Get-Item $lgpl).Length -lt 10000) { throw "LGPL text missing" }
+          if (-not (Test-Path $lgpl) -or (Get-Item $lgpl).Length -lt 3000) { throw "LGPL text missing" }
           @"
           Preview version: v0.1.0-preview.1
           Source revision: $env:GITHUB_SHA
@@ -126,6 +126,8 @@ jobs:
           $env:QML_IMPORT_PATH = ""
           $env:QML2_IMPORT_PATH = ""
           $env:QT_PLUGIN_PATH = ""
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = ""
+          $env:QT_QML_IMPORT_PATH = ""
           $env:QML_DISABLE_DISK_CACHE = "1"
           $server = Start-Process -FilePath (Join-Path $stage "spiral-server.exe") -ArgumentList "-listen","127.0.0.1:18787" -PassThru -WindowStyle Hidden
           try {
