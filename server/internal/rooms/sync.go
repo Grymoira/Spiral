@@ -398,16 +398,19 @@ func (s *Store) scheduleLocked(r *room, action string, mediaMs int64, requireArm
 		next = "playing"
 	}
 	if next == "playing" {
+		// Preserve the existing not_ready result when any member is not
+		// prepared; an outstanding cancellation is checked only after the
+		// ordinary readiness barrier has passed.
+		for _, member := range r.members {
+			if !member.member.Ready {
+				return ErrNotReady
+			}
+		}
 		// Every survivor must have reconciled the latest retired appointment
 		// before a new audible transition is allowed. Replacing an active
 		// pending event with play would itself create an unconfirmed cancel.
 		if s.pendingCancellationLocked(r) || r.playback.Pending != nil {
 			return ErrCancellationPending
-		}
-		for _, member := range r.members {
-			if !member.member.Ready {
-				return ErrNotReady
-			}
 		}
 	}
 	at := s.ServerMs() + scheduleLeadMs
