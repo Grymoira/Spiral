@@ -277,3 +277,24 @@ ordinary elapsed authority freshness and late-event checks remain decisive.
 The mechanism prevents using old local timers after detected discontinuities
 but does not guarantee timely cancellation delivery during a hard network
 partition, and still does not measure DAC/acoustic output.
+
+### Multimedia buffering and fault fencing (Issue #11, phase 7)
+
+A local Qt Multimedia transition out of LoadedMedia/BufferedMedia is not only
+a readiness withdrawal: while the backend still indicates PlayingState,
+playback may remain audible. The client now **pauses immediately**, retires
+its local one-shot timer, and sends Ready(false) for the current room track.
+It then invokes the same correlated snapshot recovery fence already used
+after sleep; restoring a locally buffered media state **cannot** autoplay a
+stale committed event or mark the member Ready until a fresh server snapshot
+confirms a nonplaying timeline.
+
+Decoding/device errors are treated as a local permanent media fault even when
+the backend's last status was BufferedMedia. A re-selected source explicitly
+clears that fault; this is fail-closed and may sacrifice availability.
+Clients must keep the room's source hash/generation private to protocol
+control only—never send local file paths, media URLs or credentials.
+
+Offline acoustic acceptance tooling and its strict evidentiary boundary are
+in `tests/ACOUSTIC_ACCEPTANCE.md`. Application-level Ready/ACK and synthetic
+PCM test signals **do not** prove true acoustic output synchronization.

@@ -45,7 +45,7 @@ function createScenario() {
                 executeServerMs:2010,mediaMs:0}},
         members:[{id:"guest", ready:true}]};
     const context = {
-        authenticated:true, clockReady:true, roomId:"room", memberId:"guest",
+        authenticated:true, clockReady:true, mediaFaulted: false, roomId:"room", memberId:"guest",
         clockEpoch:"server-clock", clockOffsetMs:0, bestRttMs:10,
         clockSamples:3, lastClockSampleMs:1900, lastAuthorityReplyMs:1950,
         authorityStaleAfterMs:2500, probeSequence:10, pendingProbes:{old:1800},

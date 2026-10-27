@@ -145,3 +145,22 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Collect synchronized dual-device microphone/loopback measurements for
       play, pause, seek and track changes, with P50/P95/max and acceptance
       thresholds established prior to testing. Keep Issue #11 OPEN.
+
+## Issue #11 phase 7 — buffering fail-closed & offline acoustic acceptance
+
+- [x] Pause Qt Multimedia immediately when a previously usable recording
+      transitions into unavailable/stalled status, regardless of PlayingState.
+- [x] Treat Qt decoding/output errors as local media faults even if the media
+      status still claims BufferedMedia; block retry until file re-selection.
+- [x] Withdraw authoritative Ready(false), fence queued COMMIT events, and
+      require correlated fresh paused-state confirmation before Ready resumes.
+- [x] Run actual shipped QML handler regression tests for lost/restored buffer,
+      still-playing remote state, pending timer retirement and faulted media.
+- [x] Add offline, Python-stdlib mono click-track generation and strict common
+      stereo-clock WAV alignment analysis with raw P50/P95/max and incomplete
+      recording rejection. Add deterministic **synthetic-only** analyzer tests.
+- [x] Document physical capture layout, threshold declaration, evidence
+      provenance, and required full play/pause/seek/network fault matrix.
+- [ ] Run physical Qt multimedia fault/restore cases, two independent network
+      paths, OS suspend, real stereo acoustic capture and pre-registered
+      multi-platform P50/P95/max verdicts. Issue #11 remains OPEN.

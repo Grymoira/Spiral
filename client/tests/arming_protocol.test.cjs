@@ -30,7 +30,7 @@ function scene() {
         play() {this.playbackState = 2; clock.plays++;}
     };
     const context = {
-        authenticated:true, clockReady:true, clockOffsetMs:0, lastAuthorityReplyMs:0, authorityStaleAfterMs:1000000, selectedHash:hash,
+        authenticated:true, clockReady:true, mediaFaulted: false, clockOffsetMs:0, lastAuthorityReplyMs:0, authorityStaleAfterMs:1000000, selectedHash:hash,
         memberId:"guest", armSentKey:"", scheduledKey:"", deferredPendingKey:"",
         wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
         finishedPendingKey:"", maxLatePlayMs:250, lastCorrectionMs:-100000,

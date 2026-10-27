@@ -24,6 +24,9 @@ ApplicationWindow {
     property string memberRole: ""
     property string memberId: ""
     property string selectedHash: ""
+    // A Qt Multimedia decoding/output error must not be interpreted as
+    // temporary buffering; require explicit file selection to retry it.
+    property bool mediaFaulted: false
     property var roomState: ({})
     property string logText: "Select a local test audio file, then create or join a room."
     property bool authenticated: false
@@ -293,8 +296,38 @@ ApplicationWindow {
                 && roomState.playback.trackId === selectedHash
     }
     function mediaLoaded() {
-        return player.mediaStatus === MediaPlayer.LoadedMedia
-                || player.mediaStatus === MediaPlayer.BufferedMedia
+        return !mediaFaulted &&
+                (player.mediaStatus === MediaPlayer.LoadedMedia ||
+                 player.mediaStatus === MediaPlayer.BufferedMedia)
+    }
+    // Qt may report StalledMedia/LoadingMedia while playbackState is still
+    // PlayingState. Readiness withdrawal alone is insufficient: stop the
+    // audio pipeline immediately and fence any old scheduled callback.
+    function handleMediaStatusChanged() {
+        if (!mediaLoaded()) {
+            player.pause()
+            playbackTimer.stop()
+            scheduledKey = ""
+            deferredPendingKey = ""
+            finishedPendingKey = ""
+            armSentKey = ""
+            if (authenticated && roomState.playback && roomState.playback.trackId) {
+                // The server may still have Ready=true even after a previous
+                // local key was cleared. A fresh authoritative snapshot after
+                // this Ready(false) must precede any resumed playback.
+                send({type:"ready", trackId:roomState.playback.trackId,
+                      trackGeneration:roomState.playback.trackGeneration, ready:false})
+                readySentKey = ""
+                if (!wakeSnapshotId && socket.status === WebSocket.Open) {
+                    wakeSnapshotId = syncTools.newOperationId()
+                    wakeSnapshotLastSentMs = -1
+                    requestWakeSnapshot()
+                }
+                syncTools.logEventLevel("client.media_unavailable", "WARN")
+            }
+        }
+        maybeReady()
+        reconcile()
     }
     function ownReady() {
         var members = roomState.members || []
@@ -323,6 +356,7 @@ ApplicationWindow {
     function selectFile(url) {
         revokeReady()
         player.pause()
+        mediaFaulted = false
         selectedHash = syncTools.sha256File(url)
         if (!selectedHash) { syncTools.logEventLevel("client.file_rejected", "WARN"); logText = "Could not hash selected file"; return }
         player.source = url
@@ -600,8 +634,15 @@ ApplicationWindow {
     MediaPlayer {
         id: player
         audioOutput: AudioOutput { volume: 0.65 }
-        onErrorOccurred: function(error, errorString) { syncTools.logEventLevel("client.media_error", "ERROR"); window.logText = "Audio error: " + errorString }
-        onMediaStatusChanged: { if (!window.mediaLoaded()) window.revokeReady(); window.maybeReady(); window.reconcile() }
+        onErrorOccurred: function(error, errorString) {
+            // Some backends emit an error without leaving BufferedMedia.
+            // A faulted pipeline must stop even if mediaStatus looks usable.
+            window.mediaFaulted = true
+            window.handleMediaStatusChanged()
+            syncTools.logEventLevel("client.media_error", "ERROR")
+            window.logText = "Audio error: select the local file again to retry"
+        }
+        onMediaStatusChanged: window.handleMediaStatusChanged()
         onDurationChanged: window.maybeReady()
     }
     FileDialog {

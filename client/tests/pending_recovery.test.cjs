@@ -38,7 +38,7 @@ function scenario() {
     };
     const hash = "a".repeat(64);
     const context = {
-        authenticated: true, clockReady: true, clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000,
+        authenticated: true, clockReady: true, mediaFaulted: false, clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000,
         roomState: {playback: {
             trackId: hash, trackGeneration: 1, durationMs: 10000,
             playState: "paused", anchorMediaMs: 0, anchorServerMs: 0,

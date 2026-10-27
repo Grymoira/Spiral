@@ -42,7 +42,7 @@ function scenario() {
     };
     const hash = "a".repeat(64);
     const context = {
-        authenticated: true, clockReady: true, clockSamples: 3,
+        authenticated: true, clockReady: true, mediaFaulted: false, clockSamples: 3,
         clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000, bestRttMs: 1000000, lastClockSampleMs: 0,
         clockEpoch: "epoch", pendingProbes: {},
         scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
