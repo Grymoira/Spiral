@@ -435,11 +435,11 @@ func TestRESTLeaveFencesCommittedPlayAndNotifiesRemainingSocket(t *testing.T) {
 		t.Fatalf("missing event-scoped cancellation notice: %v", state(canceled))
 	}
 	ack := map[string]any{
-		"type": "cancel_ack",
-		"roomEpoch": state(canceled)["roomEpoch"],
+		"type":            "cancel_ack",
+		"roomEpoch":       state(canceled)["roomEpoch"],
 		"trackGeneration": notice["trackGeneration"],
-		"eventId": notice["eventId"],
-		"stateRevision": notice["stateRevision"],
+		"eventId":         notice["eventId"],
+		"stateRevision":   notice["stateRevision"],
 	}
 	h.send(t, ack)
 	received := h.until(t, "cancel_ack_ok", nil)
