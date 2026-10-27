@@ -164,3 +164,16 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Run physical Qt multimedia fault/restore cases, two independent network
       paths, OS suspend, real stereo acoustic capture and pre-registered
       multi-platform P50/P95/max verdicts. Issue #11 remains OPEN.
+
+## Issue #11 phase 8 — explicit authority after a silent partition
+
+- [x] Prevent clock-only recovery from reusing a pre-partition playing
+      snapshot on a Qt WebSocket that still appears Open.
+- [x] Force Ready(false) even when the local Ready key was lost, clear
+      old timers/probes, and require the correlated nonplaying snapshot gate.
+- [x] Add source-derived QML regressions for the stale-snapshot replay
+      and positive/negative recovery responses.
+- [ ] Verify the actual network-loss/restore path and paused audible output
+      on physical clients with separate network links.
+- [ ] Obtain actual two-device capture evidence and approved onset, pause,
+      seek and track-change acceptance criteria. Keep #11 OPEN.
