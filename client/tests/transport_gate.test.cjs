@@ -33,6 +33,8 @@ const local = "http://127.0.0.1:8787";
 const remote = "https://public.example:8787";
 const context = {
     roomId: "", memberToken: "", serverUrl: local, memberId: "",
+    roomSessionGeneration: 0, removingGuestId: "", removalFeedback: "",
+    guestRemovalDialog: {close: () => {}},
     addressField: {text: "http://public.example:8787"},
     roomField: {text: "ROOM"}, inviteField: {text: "INVITE"},
     logText: "", socket: {active: false, url: ""}, XMLHttpRequest: FakeXHR,
