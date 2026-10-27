@@ -161,3 +161,30 @@ public-host abuse limits, or end-to-end threat modeling.
 The Qt desktop CI now runs transport URL and redirect-policy tests, alongside
 existing Qt/QML and Go checks. Real public-host interception and cross-platform
 package validation remain outstanding.
+
+## Anonymous room admission guard — 2026-10-27
+
+Issue #10: public `POST /v1/rooms` creation now uses the actual HTTP
+peer address, canonicalizing IPv4-mapped IPv6 and ignoring untrusted
+`X-Forwarded-For`/`Forwarded` headers. The Store atomically enforces:
+
+- 24 simultaneous rooms created per source IP;
+- at most 6 accepted creations per source per rolling minute;
+- at most 48 accepted public creations globally per rolling minute;
+- a 15-minute lease for rooms with no authenticated access or successful join.
+
+An authenticated WebSocket, authorized snapshot, or valid join claims the
+room, preserving the existing 24-hour member session lifetime. A rejected
+creation does not consume quota; source and global counters use only a
+bounded rolling record of successful creations (no unbounded per-IP maps).
+429 errors distinguish source capacity from creation rate, with a one-minute
+Retry-After hint for the latter. Existing join/leave/playback/reconnect
+endpoints are not rate-limited by this change.
+
+**Deployment boundary:** one source means the direct TCP peer IP, not a
+trusted human identity. Shared NAT users and reverse proxies share a
+budget; IPv6 address rotation, botnets, sybil clients and distributed
+attacks still require authenticated creation and edge-level limits.
+Do not trust forwarded client-IP headers without an explicit trusted-proxy
+configuration. Time-based cleanup runs on room operations and creation;
+it is not a background sweep.

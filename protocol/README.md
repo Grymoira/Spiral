@@ -54,3 +54,18 @@ Sample clock estimate: `offset_server_minus_client = ((s1-c0)+(s2-c3))/2`, `RTT=
 When authorized, the server accepts a command and broadcasts one `pending` event with a unique ID and a target `executeServerMs` at least **2500 ms** ahead of server time. All current ready clients translate that target using their estimated server clock and schedule local player operations. At deadline the server atomically commits the event and broadcasts a new snapshot. New host commands replace older pending events, and stale timers are rejected by ID and track generation. Clients compare `stateRevision` and `trackGeneration`; control messages do not carry media URLs or paths. Pause/seek use the server's authoritative anchor. During disconnection, the prototype pauses local playback rather than free-running.
 
 This is a *best-effort* synchronized playback baseline. There is no distributed arm/ack/commit consensus, guaranteed simultaneous audio output, jitter buffer calibration, or verified audio-device latency model. A `QMediaPlayer.position` match is not proof of acoustic synchronization. Cross-network public deployments still require abuse-defense hardening, managed TLS termination, and real devices for testing.
+
+### Anonymous room creation guard (prototype)
+
+Public `POST /v1/rooms` requests have per-source concurrent-room and
+rolling-window creation quotas, plus a global creation-rate budget.
+Requests over the rolling rate budget receive HTTP 429
+`room_creation_rate_limited` and `Retry-After: 60`; sources already at
+their concurrent-room allowance receive HTTP 429
+`source_room_limit_reached`. New rooms not claimed via an authorized
+snapshot, authenticated WebSocket, or valid join expire after 15 minutes,
+even though their issued session credentials otherwise have a 24-hour
+lifetime. These admission limits do not apply to existing room join or
+playback operations. The source address is the direct TCP peer, not an
+untrusted forwarding header; a TLS-terminating reverse proxy must be
+deployed with deliberate source attribution and edge controls.

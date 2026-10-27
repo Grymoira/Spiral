@@ -52,6 +52,7 @@ func (s *Store) authorized(roomID, token string) (*room, membership, error) {
 	if !ok {
 		return nil, membership{}, ErrUnauthorized
 	}
+	r.claimed = true
 	return r, m, nil
 }
 
