@@ -216,7 +216,9 @@ func TestLateJoinAndDepartureFreezeAlreadyPlayingRoom(t *testing.T) {
 		s.rooms[host.RoomID].playback.AnchorServerMs = s.ServerMs() - 500
 		s.mu.Unlock()
 		_, err := s.Join(host.RoomID, host.InviteCode)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		after, _ := s.Snapshot(host.RoomID, host.SessionToken)
 		if after.Playback.PlayState != "paused" || after.Playback.AnchorMediaMs < 1200 {
 			t.Fatalf("late join did not freeze active playback: %+v", after.Playback)
@@ -229,7 +231,9 @@ func TestLateJoinAndDepartureFreezeAlreadyPlayingRoom(t *testing.T) {
 		s.rooms[host.RoomID].playback.AnchorMediaMs = 500
 		s.rooms[host.RoomID].playback.AnchorServerMs = s.ServerMs() - 600
 		s.mu.Unlock()
-		if err := s.Leave(host.RoomID, guest.SessionToken); err != nil { t.Fatal(err) }
+		if err := s.Leave(host.RoomID, guest.SessionToken); err != nil {
+			t.Fatal(err)
+		}
 		after, _ := s.Snapshot(host.RoomID, host.SessionToken)
 		if after.Playback.PlayState != "paused" || after.Playback.AnchorMediaMs < 1100 {
 			t.Fatalf("guest departure did not freeze room: %+v", after.Playback)

@@ -249,7 +249,9 @@ func TestTwoClientRealWebSocketTimeline(t *testing.T) {
 	}
 	// A now-playing guest abruptly losing the socket forces the server's
 	// authoritative timeline to pause for the remaining host.
-	if err := g.Close(); err != nil { t.Fatal(err) }
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
 	paused := h.until(t, "snapshot", func(m map[string]any) bool {
 		return playback(m)["pending"] == nil && playback(m)["playState"] == "paused"
 	})
