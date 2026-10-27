@@ -26,6 +26,8 @@ type envelope struct {
 	TrackID          string `json:"trackId,omitempty"`
 	TrackGeneration  uint64 `json:"trackGeneration,omitempty"`
 	EventID          uint64 `json:"eventId,omitempty"`
+	RoomEpoch        string `json:"roomEpoch,omitempty"`
+	StateRevision    uint64 `json:"stateRevision,omitempty"`
 	Ready            bool   `json:"ready,omitempty"`
 	Action           string `json:"action,omitempty"`
 	MediaMs          int64  `json:"mediaMs,omitempty"`
@@ -225,7 +227,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		seen[key] = true
 		// Fields must use protocol-exact lowerCamelCase names.
 		switch key {
-		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs", "operationId", "expectedRevision", "reload", "eventId":
+		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs", "operationId", "expectedRevision", "reload", "eventId", "roomEpoch", "stateRevision":
 		default:
 			return envelope{}, errors.New("unknown field")
 		}
@@ -254,6 +256,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		"track":       {"type", "sha256", "durationMs", "operationId", "expectedRevision"},
 		"ready":       {"type", "trackId", "trackGeneration", "ready"},
 		"arm_ack":     {"type", "trackId", "trackGeneration", "eventId"},
+		"cancel_ack":  {"type", "roomEpoch", "trackGeneration", "eventId", "stateRevision"},
 		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
 		"snapshot":    {"type"},
 	}
@@ -447,6 +450,10 @@ func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, bool, error) 
 		return snap, err == nil, err
 	case "arm_ack":
 		return h.Store.AcknowledgeArming(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.EventID)
+	case "cancel_ack":
+		_, applied, err := h.Store.AcknowledgeCancellation(p.roomID, p.token,
+			cmd.RoomEpoch, cmd.TrackGeneration, cmd.EventID, cmd.StateRevision)
+		return rooms.Snapshot{}, applied, err
 	case "schedule":
 		return h.Store.ControlSchedule(p.roomID, p.token, cmd.Action, cmd.MediaMs,
 			cmd.OperationID, cmd.ExpectedRevision)
@@ -578,6 +585,18 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 				diagnostic.Info("playback.armed", "event_id", cmd.EventID, "track_generation", cmd.TrackGeneration)
 				h.Broadcast(p.roomID)
 				h.scheduleTimer(p.roomID, snap)
+			}
+		case "cancel_ack":
+			if err == nil {
+				if applied {
+					diagnostic.Info("playback.cancel_ack_received", "event_id", cmd.EventID,
+						"track_generation", cmd.TrackGeneration, "state_revision", cmd.StateRevision)
+				}
+				// A receipt response makes client retransmission safe even if a
+				// previous response was lost; duplicates never advance state.
+				p.send(map[string]any{"type": "cancel_ack_ok", "roomEpoch": cmd.RoomEpoch,
+					"trackGeneration": cmd.TrackGeneration, "eventId": cmd.EventID,
+					"stateRevision": cmd.StateRevision})
 			}
 		case "schedule":
 			if err == nil && applied {
