@@ -1,4 +1,5 @@
 #include "synctools.h"
+#include "transportpolicy.h"
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -38,6 +39,14 @@ SyncTools::SyncTools(QObject *parent) : QObject(parent) {
 }
 
 qint64 SyncTools::monotonicMs() const { return clock_.elapsed(); }
+
+QString SyncTools::validatedServerBase(const QString &input) const {
+    return SpiralTransport::baseUrl(input);
+}
+
+QString SyncTools::validatedWebSocketUrl(const QString &input) const {
+    return SpiralTransport::webSocketUrl(input);
+}
 
 QString SyncTools::sha256File(const QUrl &url) const {
     if (!url.isLocalFile()) return {};

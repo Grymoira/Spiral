@@ -46,6 +46,8 @@ ApplicationWindow {
             socket.sendTextMessage(JSON.stringify(message))
     }
     function request(method, path, payload, done) {
+        var base = syncTools.validatedServerBase(serverUrl)
+        if (!base) { done(null, "Server address rejected: use HTTPS remotely or local loopback HTTP"); return }
         var req = new XMLHttpRequest()
         req.onreadystatechange = function() {
             if (req.readyState !== XMLHttpRequest.DONE) return
@@ -54,11 +56,16 @@ ApplicationWindow {
             if (req.status >= 200 && req.status < 300) done(body, "")
             else done(null, body.error || ("HTTP " + req.status + " · check network / TLS"))
         }
-        req.open(method, endpoint(path))
+        req.open(method, base + path)
         req.setRequestHeader("Content-Type", "application/json")
         req.send(JSON.stringify(payload))
     }
     function connectRoom(credentials) {
+        var wsUrl = syncTools.validatedWebSocketUrl(serverUrl)
+        if (!wsUrl) {
+            logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"
+            return
+        }
         roomId = credentials.roomId
         memberId = credentials.memberId
         memberToken = credentials.sessionToken
@@ -71,13 +78,15 @@ ApplicationWindow {
         scheduledKey = ""
         readySentKey = ""
         roomState = ({})
-        socket.url = serverUrl.replace(/^http/, "ws").replace(/\/+$/, "") + "/v1/ws"
+        socket.url = wsUrl
         socket.active = true
         logText = "Connecting real-time room…"
     }
     function createRoom() {
         if (roomId !== "") return
-        serverUrl = addressField.text
+        var base = syncTools.validatedServerBase(addressField.text)
+        if (!base) { logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"; return }
+        serverUrl = base
         request("POST", "/v1/rooms", {}, function(body, err) {
             if (err) { syncTools.logEventLevel("client.protocol_error", "WARN"); logText = "Create failed: " + err; return }
             syncTools.logEvent("client.room_created")
@@ -86,7 +95,9 @@ ApplicationWindow {
     }
     function joinRoom() {
         if (roomId !== "") return
-        serverUrl = addressField.text
+        var base = syncTools.validatedServerBase(addressField.text)
+        if (!base) { logText = "Server address rejected: use HTTPS remotely or local loopback HTTP"; return }
+        serverUrl = base
         var target = roomField.text.trim()
         var invitation = inviteField.text.trim()
         if (!target || !invitation) { logText = "Room ID and invitation required"; return }
@@ -107,9 +118,10 @@ ApplicationWindow {
         roomState = ({})
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
-        if (originalRoom !== "" && token !== "") {
+        var base = syncTools.validatedServerBase(serverUrl)
+        if (originalRoom !== "" && token !== "" && base) {
             var req = new XMLHttpRequest()
-            req.open("DELETE", endpoint("/v1/rooms/" + encodeURIComponent(originalRoom) + "/members/me"))
+            req.open("DELETE", base + "/v1/rooms/" + encodeURIComponent(originalRoom) + "/members/me")
             req.setRequestHeader("Authorization", "Bearer " + token)
             req.send()
         }
