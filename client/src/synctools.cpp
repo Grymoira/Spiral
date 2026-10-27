@@ -1,9 +1,41 @@
 #include "synctools.h"
 
 #include <QCryptographicHash>
+#include <QDateTime>
+#include <QDir>
 #include <QFile>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSet>
+#include <QStandardPaths>
+#include <QUuid>
 
-SyncTools::SyncTools(QObject *parent) : QObject(parent) { clock_.start(); }
+namespace {
+constexpr qint64 MaxLogBytes = 2 * 1024 * 1024;
+
+// Never accept caller-supplied text, URLs, tokens, paths or error messages.
+// Event names are a fixed vocabulary maintained alongside the protocol.
+const QSet<QString> &approvedEvents() {
+    static const QSet<QString> events = {
+        QStringLiteral("client.started"), QStringLiteral("client.stopped"),
+        QStringLiteral("client.file_selected"), QStringLiteral("client.file_rejected"),
+        QStringLiteral("client.media_error"), QStringLiteral("client.room_created"),
+        QStringLiteral("client.room_joined"), QStringLiteral("client.room_left"),
+        QStringLiteral("client.websocket_open"), QStringLiteral("client.websocket_closed"),
+        QStringLiteral("client.authenticated"), QStringLiteral("client.clock_calibrated"),
+        QStringLiteral("client.clock_expired"), QStringLiteral("client.track_shared"),
+        QStringLiteral("client.scheduled_command"), QStringLiteral("client.playback_executed"),
+        QStringLiteral("client.protocol_error"), QStringLiteral("client.room_error")
+    };
+    return events;
+}
+}
+
+SyncTools::SyncTools(QObject *parent) : QObject(parent) {
+    clock_.start();
+    sessionId_ = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    logEvent(QStringLiteral("client.started"));
+}
 
 qint64 SyncTools::monotonicMs() const { return clock_.elapsed(); }
 
@@ -14,4 +46,34 @@ QString SyncTools::sha256File(const QUrl &url) const {
     QCryptographicHash digest(QCryptographicHash::Sha256);
     if (!digest.addData(&f)) return {};
     return QString::fromLatin1(digest.result().toHex());
+}
+
+void SyncTools::logEvent(const QString &event) const {
+    logEventLevel(event, QStringLiteral("INFO"));
+}
+
+void SyncTools::logEventLevel(const QString &event, const QString &level) const {
+    if (!approvedEvents().contains(event)) return;
+    if (level != QStringLiteral("INFO") && level != QStringLiteral("WARN") && level != QStringLiteral("ERROR")) return;
+    const QString directory = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
+    if (directory.isEmpty() || !QDir().mkpath(directory)) return;
+    const QString path = QDir(directory).filePath(QStringLiteral("events.jsonl"));
+    QFile previous(path);
+    if (previous.size() >= MaxLogBytes) {
+        QFile::remove(path + QStringLiteral(".1"));
+        if (!previous.rename(path + QStringLiteral(".1"))) return;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append)) return;
+    const QJsonObject record {
+        {QStringLiteral("timestamp"), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {QStringLiteral("level"), level},
+        {QStringLiteral("event"), event},
+        {QStringLiteral("component"), QStringLiteral("desktop")},
+        {QStringLiteral("service"), QStringLiteral("spiral-client")},
+        {QStringLiteral("schema_version"), 1},
+        {QStringLiteral("session_id"), sessionId_}
+    };
+    file.write(QJsonDocument(record).toJson(QJsonDocument::Compact));
+    file.write("\n");
 }

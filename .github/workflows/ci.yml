@@ -41,7 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install desktop build prerequisites
-        run: sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libgl1-mesa-dev libxkbcommon-dev libxcb-cursor0 xvfb libxkbcommon-x11-0 libxcb-xinerama0
       - name: Install Qt 6.8 desktop SDK
         uses: jurplel/install-qt-action@v4
         with:
@@ -52,3 +52,19 @@ jobs:
         run: cmake --preset dev -DSPIRAL_BUILD_SERVER=OFF
       - name: Compile Qt desktop client
         run: cmake --build --preset dev --parallel 2
+      - name: Headless QML startup smoke test
+        run: |
+          set +e
+          timeout 8s xvfb-run -a env QT_QUICK_BACKEND=software QT_OPENGL=software ./build/dev/client/spiral-client > "$RUNNER_TEMP/spiral-qt-smoke.log" 2>&1
+          result=$?
+          set -e
+          cat "$RUNNER_TEMP/spiral-qt-smoke.log"
+          # 124 means the desktop app stayed alive until deliberately stopped.
+          if [ "$result" -ne 124 ]; then
+            echo "Qt desktop terminated unexpectedly (code $result)"
+            exit 1
+          fi
+          if grep -E 'QQmlApplicationEngine failed|module .* is not installed|Error loading QML file|ReferenceError:|TypeError:' "$RUNNER_TEMP/spiral-qt-smoke.log"; then
+            echo "QML startup emitted runtime errors"
+            exit 1
+          fi

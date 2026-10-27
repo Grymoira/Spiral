@@ -255,3 +255,51 @@ func TestAuthenticatedTLSSocket(t *testing.T) {
 		t.Fatalf("TLS websocket auth failed: %v", m)
 	}
 }
+
+func TestDisconnectCancelsScheduledPlayForRoom(t *testing.T) {
+	store := rooms.NewStore()
+	server := httptest.NewServer(api.NewHandler(store))
+	defer server.Close()
+	host := httpRoom(t, server.Client(), server.URL+"/v1/rooms", `{}`)
+	guest := httpRoom(t, server.Client(), server.URL+"/v1/rooms/"+host.RoomID+"/join", `{"inviteCode":"`+host.InviteCode+`"}`)
+	addr := strings.TrimPrefix(server.URL, "http://")
+	h := connect(t, addr)
+	g := connect(t, addr)
+	h.send(t, map[string]any{"type": "auth", "roomId": host.RoomID, "sessionToken": host.SessionToken})
+	g.send(t, map[string]any{"type": "auth", "roomId": host.RoomID, "sessionToken": guest.SessionToken})
+	h.until(t, "auth_ok", nil)
+	g.until(t, "auth_ok", nil)
+	h.until(t, "snapshot", nil)
+	g.until(t, "snapshot", nil)
+	hash := strings.Repeat("f", 64)
+	h.send(t, map[string]any{"type": "track", "sha256": hash, "durationMs": 20000})
+	h.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["trackId"] == hash })
+	g.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["trackId"] == hash })
+	for _, c := range []*testConn{h, g} {
+		c.send(t, map[string]any{"type": "ready", "trackId": hash, "trackGeneration": 1, "ready": true})
+	}
+	h.until(t, "snapshot", func(m map[string]any) bool {
+		members := state(m)["members"].([]any)
+		return len(members) == 2 && members[0].(map[string]any)["ready"] == true && members[1].(map[string]any)["ready"] == true
+	})
+	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
+	before := h.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after := h.until(t, "snapshot", func(m map[string]any) bool {
+		return state(m)["stateRevision"].(float64) > state(before)["stateRevision"].(float64) && playback(m)["pending"] == nil
+	})
+	if playback(after)["playState"] != "paused" {
+		t.Fatal("play committed after guest disconnect")
+	}
+	// Let the original timer deadline elapse; a stale scheduled event cannot restart playback.
+	time.Sleep(2600 * time.Millisecond)
+	final, err := store.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if final.Playback.PlayState != "paused" || final.Playback.Pending != nil {
+		t.Fatalf("old timer restarted playback: %+v", final.Playback)
+	}
+}

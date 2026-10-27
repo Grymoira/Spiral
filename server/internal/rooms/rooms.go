@@ -168,6 +168,8 @@ func (s *Store) Join(roomID, invite string) (Credentials, error) {
 	}
 	expires := s.now().Add(sessionLifetime)
 	r.members[token] = membership{member: Member{ID: memberID, Role: "member"}, expiresAt: expires}
+	// A newly joined member is not ready: cancel an in-flight play event.
+	s.cancelUnreadyPlaybackLocked(r)
 	r.revision++
 	return Credentials{RoomID: roomID, MemberID: memberID, SessionToken: token, SessionExpiresAt: expires}, nil
 }

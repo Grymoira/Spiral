@@ -38,3 +38,16 @@ func TestListenLoopbackBindsLoopback(t *testing.T) {
 		})
 	}
 }
+
+func TestLogLevelContract(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warn", "error", "WARN"} {
+		if _, err := logLevel(level); err != nil {
+			t.Fatalf("rejected supported level %q: %v", level, err)
+		}
+	}
+	for _, level := range []string{"trace", "quiet", "", "off"} {
+		if _, err := logLevel(level); err == nil {
+			t.Fatalf("accepted undocumented level %q", level)
+		}
+	}
+}

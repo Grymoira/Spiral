@@ -79,7 +79,8 @@ ApplicationWindow {
         if (roomId !== "") return
         serverUrl = addressField.text
         request("POST", "/v1/rooms", {}, function(body, err) {
-            if (err) { logText = "Create failed: " + err; return }
+            if (err) { syncTools.logEventLevel("client.protocol_error", "WARN"); logText = "Create failed: " + err; return }
+            syncTools.logEvent("client.room_created")
             connectRoom(body)
         })
     }
@@ -91,7 +92,8 @@ ApplicationWindow {
         if (!target || !invitation) { logText = "Room ID and invitation required"; return }
         request("POST", "/v1/rooms/" + encodeURIComponent(target) + "/join",
                 {inviteCode: invitation}, function(body, err) {
-            if (err) { logText = "Join failed: " + err; return }
+            if (err) { syncTools.logEventLevel("client.protocol_error", "WARN"); logText = "Join failed: " + err; return }
+            syncTools.logEvent("client.room_joined")
             connectRoom(body)
         })
     }
@@ -112,10 +114,14 @@ ApplicationWindow {
             req.send()
         }
         player.pause()
+        syncTools.logEvent("client.room_left")
         logText = "Left room"
     }
     function probeClock() {
         if (!authenticated) return
+        // Bound unanswered samples across packet loss / intermittent networks.
+        if (Object.keys(pendingProbes).length >= 8)
+            pendingProbes = ({})
         probeSequence++
         var id = String(probeSequence)
         var sent = syncTools.monotonicMs()
@@ -139,6 +145,7 @@ ApplicationWindow {
         }
         if (clockSamples >= 3 && !clockReady) {
             clockReady = true
+            syncTools.logEvent("client.clock_calibrated")
             logText = "Clock calibrated (best RTT " + Math.round(bestRttMs) + " ms)"
             maybeReady()
             reconcile()
@@ -151,6 +158,14 @@ ApplicationWindow {
     function mediaLoaded() {
         return player.mediaStatus === MediaPlayer.LoadedMedia
                 || player.mediaStatus === MediaPlayer.BufferedMedia
+    }
+    function ownReady() {
+        var members = roomState.members || []
+        for (var i = 0; i < members.length; ++i) {
+            if (members[i].id === memberId)
+                return members[i].ready === true
+        }
+        return false
     }
     function maybeReady() {
         if (!authenticated || !clockReady || !roomState.playback || !sameRecording()) return
@@ -171,8 +186,9 @@ ApplicationWindow {
         revokeReady()
         player.pause()
         selectedHash = syncTools.sha256File(url)
-        if (!selectedHash) { logText = "Could not hash selected file"; return }
+        if (!selectedHash) { syncTools.logEventLevel("client.file_rejected", "WARN"); logText = "Could not hash selected file"; return }
         player.source = url
+        syncTools.logEvent("client.file_selected")
         logText = "Local file selected (SHA-256 " + selectedHash.substring(0, 12) + "…)"
     }
     function shareTrack() {
@@ -181,6 +197,7 @@ ApplicationWindow {
             return
         }
         send({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration)})
+        syncTools.logEvent("client.track_shared")
     }
     function roomCommand(action, ms) {
         if (memberRole !== "host" || !authenticated || !clockReady) {
@@ -188,6 +205,7 @@ ApplicationWindow {
             return
         }
         send({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
+        syncTools.logEvent("client.scheduled_command")
     }
     function predictedPosition(p) {
         var v = Number(p.anchorMediaMs)
@@ -196,9 +214,12 @@ ApplicationWindow {
         return Math.max(0, Math.min(Number(p.durationMs), v))
     }
     function executePending() {
-        if (!clockReady || !sameRecording() || !mediaLoaded()) return
+        if (!authenticated || !clockReady || !sameRecording() || !mediaLoaded()) return
         var p = roomState.playback
         if (!p || !p.pending || scheduledKey !== String(p.trackGeneration) + ":" + p.pending.id) return
+        // A lost Ready or stale snapshot must never start audible playback.
+        if (p.pending.playState === "playing" && !ownReady()) return
+        syncTools.logEvent("client.playback_executed")
         if (p.pending.playState === "playing") {
             player.position = Math.min(Number(p.durationMs), Number(p.pending.mediaMs) +
                     Math.max(0, syncTools.monotonicMs() + clockOffsetMs - Number(p.pending.executeServerMs)))
@@ -226,6 +247,10 @@ ApplicationWindow {
         scheduledKey = ""
         var position = predictedPosition(p)
         if (p.playState === "playing") {
+            if (!ownReady()) {
+                player.pause()
+                return
+            }
             if (player.playbackState !== MediaPlayer.PlayingState) {
                 player.position = position
                 player.play()
@@ -246,7 +271,7 @@ ApplicationWindow {
     MediaPlayer {
         id: player
         audioOutput: AudioOutput { volume: 0.65 }
-        onErrorOccurred: function(error, errorString) { window.logText = "Audio error: " + errorString }
+        onErrorOccurred: function(error, errorString) { syncTools.logEventLevel("client.media_error", "ERROR"); window.logText = "Audio error: " + errorString }
         onMediaStatusChanged: { if (!window.mediaLoaded()) window.revokeReady(); window.maybeReady(); window.reconcile() }
         onDurationChanged: window.maybeReady()
     }
@@ -261,10 +286,12 @@ ApplicationWindow {
         active: false
         onStatusChanged: {
             if (status === WebSocket.Open) {
+                syncTools.logEvent("client.websocket_open")
                 window.authenticated = false
                 socket.sendTextMessage(JSON.stringify({type:"auth", roomId:window.roomId,
                                                       sessionToken:window.memberToken}))
             } else if (status === WebSocket.Error || status === WebSocket.Closed) {
+                syncTools.logEventLevel("client.websocket_closed", "WARN")
                 window.authenticated = false
                 window.clockReady = false
                 window.readySentKey = ""
@@ -278,6 +305,7 @@ ApplicationWindow {
             var msg
             try { msg = JSON.parse(text) } catch (e) { return }
             if (msg.type === "auth_ok") {
+                syncTools.logEvent("client.authenticated")
                 window.memberRole = msg.role
                 window.authenticated = true
                 window.clockEpoch = msg.clockEpoch
@@ -308,7 +336,7 @@ ApplicationWindow {
                     window.maybeReady()
                     window.reconcile()
                 }
-            } else if (msg.type === "error") window.logText = "Room error: " + msg.code
+            } else if (msg.type === "error") { syncTools.logEventLevel("client.room_error", "WARN"); window.logText = "Room error: " + msg.code }
         }
     }
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
@@ -319,6 +347,7 @@ ApplicationWindow {
             window.clockSamples = 0
             window.bestRttMs = 1000000
             player.pause()
+            syncTools.logEventLevel("client.clock_expired", "WARN")
             window.logText = "Clock estimate expired; playback paused pending recalibration"
         }
         window.reconcile()

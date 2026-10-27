@@ -93,6 +93,21 @@ func (s *Store) SetTrack(roomID, token, hash string, durationMs int64) (Snapshot
 	return s.snapshot(r), nil
 }
 
+// cancelUnreadyPlaybackLocked withdraws a queued playing-state transition
+// whenever the readiness barrier no longer holds. Caller must hold s.mu.
+func (s *Store) cancelUnreadyPlaybackLocked(r *room) bool {
+	if r.playback.Pending == nil || r.playback.Pending.PlayState != "playing" {
+		return false
+	}
+	for _, m := range r.members {
+		if !m.member.Ready {
+			r.playback.Pending = nil
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Store) SetReady(roomID, token, trackID string, generation uint64, ready bool) (Snapshot, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -108,6 +123,7 @@ func (s *Store) SetReady(roomID, token, trackID string, generation uint64, ready
 	}
 	m.member.Ready = ready
 	r.members[token] = m
+	s.cancelUnreadyPlaybackLocked(r)
 	r.revision++
 	return s.snapshot(r), nil
 }
@@ -180,6 +196,11 @@ func (s *Store) CommitEvent(roomID string, eventID uint64) (Snapshot, bool) {
 	e := r.playback.Pending
 	if e == nil || e.ID != eventID || e.TrackGeneration != r.playback.TrackGeneration || s.ServerMs() < e.ExecuteServerMs {
 		return Snapshot{}, false
+	}
+	// Recheck the barrier immediately before commit, not only at scheduling.
+	if s.cancelUnreadyPlaybackLocked(r) {
+		r.revision++
+		return s.snapshot(r), false
 	}
 	r.playback.PlayState = e.PlayState
 	r.playback.AnchorMediaMs = e.MediaMs

@@ -2,7 +2,7 @@
 
 A cross-platform experimental **multi-device synchronized local-audio player**. Every participant independently chooses the *same audio file*; the Go server coordinates authenticated rooms, clocks and scheduled playback commands. **Audio bytes are not relayed by the server.**
 
-> **Status: experimental development milestone, not a stable release.** Two independent WebSocket clients have been tested against the synchronization server. The Qt desktop client and real multi-device acoustic sync have **not** been compiled/measured in this environment. This is server-coordinated client-to-server networking, not device-to-device P2P NAT traversal.
+> **Status: experimental development milestone, not a stable release.** Two independent WebSocket clients have been tested against the synchronization server. The Qt desktop client **compiled on Linux Qt 6.8.3 CI**, but headless GUI startup and real multi-device acoustic sync must still be verified. This is server-coordinated client-to-server networking, not device-to-device P2P NAT traversal.
 
 ## Implemented now
 
@@ -57,7 +57,7 @@ The HTTPS/WSS path is available but **not production hardened** (no credential r
 - Clock offset uses four timestamps and an RTT filter; asymmetric network latency remains a source of systematic error. Inconsistent clocks/large delays can cause degraded synchronization.
 - Readiness is a client assertion based on file hash and local media-load state, not a server-side proof of decodability or identical audio output.
 - No simultaneous playback consensus (arm/ack/commit), fine-grained rate control, durable rooms, track queues, network music providers, NAT-traversing peer-to-peer sockets, or public deployment hardening. The server holds no music files or platform credentials.
-- Qt client build/runtime on Windows, Linux and macOS, and actual cross-network sound measurements, remain to be verified before offering end-user binaries or a formal Release.
+- Qt GUI runtime and actual sound measurements on Windows, Linux and macOS remain to be verified before offering end-user binaries or a formal Release.
 
 ## Documentation
 
@@ -66,3 +66,20 @@ The HTTPS/WSS path is available but **not production hardened** (no credential r
 - [Roadmap](docs/roadmap.md)
 - [Local bootstrap decision](docs/adr/0001-loopback-bootstrap.md)
 - [MIT License](LICENSE) and [third-party licensing notes](docs/LICENSING.md)
+
+## Structured event logs
+
+The Go server emits a UTF-8 JSON object per line to stdout, with UTC timestamp,
+severity, stable event code, component, request/connection correlation ID and
+relevant numeric status/timing fields. Adjust verbosity with `-log-level warn`
+(or `debug`, `info`, `error`). The Qt client writes bounded, locally rotated
+`events.jsonl` records to its application data directory. Neither channel is
+intended to log room invitations, bearer tokens, arbitrary URLs or audio paths.
+See [Logging contract](docs/LOGGING.md).
+
+**Engineering status:** Readiness cancellation, per-IP/global WebSocket limits,
+reconnect fencing and strict log redaction have automated tests. The Linux Qt
+client previously passed compilation in CI, but this increment also adds a
+headless QML *startup* smoke test. Acoustic synchrony on physical devices is
+not verified. Chat/danmaku remain intentionally deferred, and public-host
+security hardening is still incomplete. Do not treat this as a production release.

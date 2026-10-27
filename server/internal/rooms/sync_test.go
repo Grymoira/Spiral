@@ -84,3 +84,103 @@ func TestScheduleCommitAndMediaProjection(t *testing.T) {
 		t.Fatalf("projection: %d", expected)
 	}
 }
+
+func TestPendingPlayCancelledWhenReadinessRevoked(t *testing.T) {
+	s := NewStore()
+	host, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	guest, err := s.Join(host.RoomID, host.InviteCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("c", 64)
+	track, err := s.SetTrack(host.RoomID, host.SessionToken, hash, 30000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, token := range []string{host.SessionToken, guest.SessionToken} {
+		if _, err := s.SetReady(host.RoomID, token, hash, track.Playback.TrackGeneration, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending, err := s.Schedule(host.RoomID, host.SessionToken, "play", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := pending.Playback.Pending.ID
+	revoked, err := s.SetReady(host.RoomID, guest.SessionToken, hash, track.Playback.TrackGeneration, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revoked.Playback.Pending != nil || revoked.StateRevision <= pending.StateRevision {
+		t.Fatalf("unready participant did not cancel pending play: %+v", revoked)
+	}
+	if s.PendingMatches(host.RoomID, id) {
+		t.Fatal("stale play is still pending")
+	}
+	if _, committed := s.CommitEvent(host.RoomID, id); committed {
+		t.Fatal("stale play committed")
+	}
+	if _, err := s.Schedule(host.RoomID, host.SessionToken, "play", 0); err != ErrNotReady {
+		t.Fatalf("unready participant bypassed barrier: %v", err)
+	}
+}
+
+func TestNewMemberCancelsPendingPlayback(t *testing.T) {
+	s := NewStore()
+	host, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("d", 64)
+	if _, err := s.SetTrack(host.RoomID, host.SessionToken, hash, 20000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SetReady(host.RoomID, host.SessionToken, hash, 1, true); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := s.Schedule(host.RoomID, host.SessionToken, "play", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Join(host.RoomID, host.InviteCode); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Playback.Pending != nil || current.Playback.PlayState != "paused" {
+		t.Fatalf("new unready participant retained pending play: %+v", current.Playback)
+	}
+	if _, committed := s.CommitEvent(host.RoomID, pending.Playback.Pending.ID); committed {
+		t.Fatal("scheduled play committed after new participant joined")
+	}
+}
+
+func TestPendingPauseUnaffectedByUnreadyMember(t *testing.T) {
+	s := NewStore()
+	host, err := s.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := strings.Repeat("e", 64)
+	s.SetTrack(host.RoomID, host.SessionToken, hash, 20000)
+	s.SetReady(host.RoomID, host.SessionToken, hash, 1, true)
+	pause, err := s.Schedule(host.RoomID, host.SessionToken, "pause", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Join(host.RoomID, host.InviteCode); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Playback.Pending == nil || current.Playback.Pending.ID != pause.Playback.Pending.ID {
+		t.Fatal("safe pause must remain scheduled when a member joins")
+	}
+}

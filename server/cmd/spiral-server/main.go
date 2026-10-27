@@ -5,12 +5,15 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/Grymoira/Spiral/server/internal/api"
+	"github.com/Grymoira/Spiral/server/internal/observability"
 	"github.com/Grymoira/Spiral/server/internal/rooms"
 )
 
@@ -37,13 +40,37 @@ func listenLoopback(address string) (net.Listener, error) {
 	return listener, nil
 }
 
+func logLevel(raw string) (slog.Level, error) {
+	switch strings.ToLower(raw) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log level: expected debug, info, warn or error")
+	}
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8787", "listening address (public binds require TLS)")
 	cert := flag.String("tls-cert", "", "PEM certificate for HTTPS/WSS")
 	key := flag.String("tls-key", "", "PEM private key for HTTPS/WSS")
+	level := flag.String("log-level", "info", "JSONL log threshold (debug, info, warn, error)")
 	flag.Parse()
+	parsedLevel, levelErr := logLevel(*level)
+	if levelErr != nil {
+		fmt.Fprintln(os.Stderr, levelErr)
+		os.Exit(2)
+	}
+	logger := observability.NewLogger(os.Stdout, parsedLevel)
+	slog.SetDefault(logger)
 	if (*cert == "") != (*key == "") {
-		log.Fatal("both tls-cert and tls-key must be provided")
+		logger.Error("server.configuration_rejected", "component", "server", "reason", "tls_pair_required")
+		os.Exit(2)
 	}
 	var listener net.Listener
 	var err error
@@ -53,11 +80,13 @@ func main() {
 		listener, err = net.Listen("tcp", *listen)
 	}
 	if err != nil {
-		log.Fatal(err)
+		logger.Error("server.listen_failed", "component", "server", "reason", "listen_failed", "error", err.Error())
+		os.Exit(1)
 	}
 	defer listener.Close()
+	handler := observability.HTTPLogs(api.NewHandler(rooms.NewStore()), logger)
 	server := &http.Server{
-		Handler:           api.NewHandler(rooms.NewStore()),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,
@@ -65,17 +94,19 @@ func main() {
 		MaxHeaderBytes:    8192,
 		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 	}
-	if *cert == "" {
-		log.Printf("Spiral local HTTP/WS listening on %s (loopback only)", listener.Addr())
-	} else {
-		log.Printf("Spiral HTTPS/WSS listening on %s (experimental)", listener.Addr())
+	transport := "http_ws_loopback"
+	if *cert != "" {
+		transport = "https_wss"
 	}
+	logger.Info("server.started", "component", "server", "transport", transport, "listen_address", listener.Addr().String())
 	if *cert != "" {
 		err = server.ServeTLS(listener, *cert, *key)
 	} else {
 		err = server.Serve(listener)
 	}
 	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+		logger.Error("server.terminated", "component", "server", "reason", "serve_failed", "error", err.Error())
+		os.Exit(1)
 	}
+	logger.Info("server.stopped", "component", "server")
 }

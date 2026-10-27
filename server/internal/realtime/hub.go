@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Grymoira/Spiral/server/internal/rooms"
@@ -55,37 +58,87 @@ func (p *peer) send(v any) {
 }
 
 type Hub struct {
-	Store   *rooms.Store
-	mu      sync.Mutex
-	clients map[string]map[string]*peer
-	timerMu sync.Mutex
-	timers  map[string]*time.Timer
+	logger             *slog.Logger
+	connectionSequence atomic.Uint64
+	Store              *rooms.Store
+	mu                 sync.Mutex
+	clients            map[string]map[string]*peer
+	timerMu            sync.Mutex
+	timers             map[string]*time.Timer
+	admitMu            sync.Mutex
+	activeSockets      int
+	socketsByIP        map[string]int
 }
 
 func NewHub(s *rooms.Store) *Hub {
-	return &Hub{Store: s, clients: make(map[string]map[string]*peer), timers: make(map[string]*time.Timer)}
+	return &Hub{Store: s, logger: slog.Default(), clients: make(map[string]map[string]*peer), timers: make(map[string]*time.Timer), socketsByIP: make(map[string]int)}
+}
+
+// These are protective budgets for unauthenticated and authenticated sockets,
+// not a substitute for a front-end rate limiter or a production load test.
+const maxOpenWebSockets = 512
+const maxWebSocketsPerIP = 64
+
+func (h *Hub) acquireSocket(remote string) (func(), bool) {
+	ip, _, err := netSplitHostPort(remote)
+	if err != nil || ip == "" {
+		return nil, false
+	}
+	h.admitMu.Lock()
+	defer h.admitMu.Unlock()
+	if h.activeSockets >= maxOpenWebSockets || h.socketsByIP[ip] >= maxWebSocketsPerIP {
+		return nil, false
+	}
+	h.activeSockets++
+	h.socketsByIP[ip]++
+	return func() {
+		h.admitMu.Lock()
+		defer h.admitMu.Unlock()
+		h.activeSockets--
+		h.socketsByIP[ip]--
+		if h.socketsByIP[ip] == 0 {
+			delete(h.socketsByIP, ip)
+		}
+	}, true
 }
 
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	connectionID := fmt.Sprintf("ws-%016x", h.connectionSequence.Add(1))
+	diagnostic := h.logger.With("component", "websocket", "connection_id", connectionID)
+
 	if r.URL.RawQuery != "" {
+		diagnostic.Warn("websocket.handshake_rejected", "reason", "query_forbidden")
 		http.Error(w, "websocket credentials must not be in URL", http.StatusBadRequest)
 		return
 	}
 	if r.TLS == nil && !loopbackRequest(r) {
+		diagnostic.Warn("websocket.handshake_rejected", "reason", "unencrypted_remote")
 		http.Error(w, "plaintext websocket is only permitted over loopback", http.StatusForbidden)
 		return
 	}
 	if r.Method != http.MethodGet {
+		diagnostic.Warn("websocket.handshake_rejected", "reason", "invalid_method")
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	release, allowed := h.acquireSocket(r.RemoteAddr)
+	if !allowed {
+		diagnostic.Warn("websocket.admission_rejected", "reason", "connection_limit")
+		w.Header().Set("Retry-After", "2")
+		http.Error(w, "websocket capacity reached", http.StatusTooManyRequests)
+		return
+	}
+	defer release()
 	c, err := upgrade(w, r)
 	if err != nil {
+		diagnostic.Warn("websocket.handshake_rejected", "reason", "invalid_handshake")
 		http.Error(w, "invalid websocket handshake", http.StatusBadRequest)
 		return
 	}
-	h.handle(c)
+	diagnostic.Info("websocket.connected")
+	defer diagnostic.Info("websocket.disconnected")
+	h.handle(c, diagnostic)
 }
 
 func loopbackRequest(r *http.Request) bool {
@@ -178,6 +231,15 @@ func (h *Hub) register(p *peer) {
 	}
 	h.clearReady(p)
 }
+
+// isCurrent fences out a superseded connection, even if a buffered frame was
+// already received before its socket was closed by a reconnect.
+func (h *Hub) isCurrent(p *peer) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.clients[p.roomID][p.memberID] == p
+}
+
 func (h *Hub) unregister(p *peer) {
 	h.mu.Lock()
 	current := h.clients[p.roomID][p.memberID] == p
@@ -251,6 +313,7 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 		}
 		h.timerMu.Unlock()
 		if _, ok := h.Store.CommitEvent(roomID, event.ID); ok {
+			h.logger.Info("playback.committed", "component", "synchronization", "event_id", event.ID, "action", event.Action, "track_generation", event.TrackGeneration)
 			h.Broadcast(roomID)
 		}
 	})
@@ -258,7 +321,7 @@ func (h *Hub) scheduleTimer(roomID string, snap rooms.Snapshot) {
 	h.timerMu.Unlock()
 }
 
-func (h *Hub) handle(c *socket) {
+func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 	defer c.Close()
 	_ = c.SetReadDeadline(time.Now().Add(8 * time.Second))
 	message, err := c.readText()
@@ -267,14 +330,17 @@ func (h *Hub) handle(c *socket) {
 	}
 	m, err := strictEnvelope(message)
 	if err != nil || m.Type != "auth" || m.RoomID == "" || m.SessionToken == "" {
+		diagnostic.Warn("websocket.authentication_rejected", "reason", "malformed_auth")
 		_ = c.writeFrame(1, []byte(`{"type":"error","code":"auth_required"}`))
 		return
 	}
 	member, err := h.Store.Authorize(m.RoomID, m.SessionToken)
 	if err != nil {
+		diagnostic.Warn("websocket.authentication_rejected", "reason", "unauthorized")
 		_ = c.writeFrame(1, []byte(`{"type":"error","code":"unauthorized"}`))
 		return
 	}
+	diagnostic.Info("websocket.authenticated", "role", member.Role)
 	p := &peer{conn: c, roomID: m.RoomID, memberID: member.ID, token: m.SessionToken, outgoing: make(chan []byte, 32), shutdown: make(chan struct{})}
 	h.register(p)
 	defer h.unregister(p)
@@ -329,16 +395,24 @@ func (h *Hub) handle(c *socket) {
 		}
 		count++
 		if count > 80 {
+			diagnostic.Warn("websocket.rate_limited")
 			p.send(map[string]string{"type": "error", "code": "rate_limited"})
 			return
 		}
 		cmd, err := strictEnvelope(raw)
 		if err != nil {
+			diagnostic.Warn("websocket.invalid_message", "reason", "schema")
 			p.send(map[string]string{"type": "error", "code": "invalid_message"})
 			continue
 		}
+		// A superseded socket is no longer authorized to mutate room state.
+		if !h.isCurrent(p) {
+			diagnostic.Warn("websocket.session_superseded")
+			return
+		}
 		// Revalidate access on EVERY command: REST Leave/expiry revokes WS authority.
 		if _, err := h.Store.Authorize(p.roomID, p.token); err != nil {
+			diagnostic.Warn("websocket.session_revoked")
 			p.send(map[string]string{"type": "error", "code": "unauthorized"})
 			return
 		}
@@ -353,18 +427,21 @@ func (h *Hub) handle(c *socket) {
 		case "track":
 			_, err = h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
 			if err == nil {
+				diagnostic.Info("playback.track_changed", "duration_ms", cmd.DurationMs)
 				h.cancelTimer(p.roomID)
 				h.Broadcast(p.roomID)
 			}
 		case "ready":
 			_, err = h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
 			if err == nil {
+				diagnostic.Info("playback.readiness_changed", "ready", cmd.Ready)
 				h.Broadcast(p.roomID)
 			}
 		case "schedule":
 			var snap rooms.Snapshot
 			snap, err = h.Store.Schedule(p.roomID, p.token, cmd.Action, cmd.MediaMs)
 			if err == nil {
+				diagnostic.Info("playback.scheduled", "action", cmd.Action, "event_id", snap.Playback.Pending.ID, "track_generation", snap.Playback.TrackGeneration)
 				h.Broadcast(p.roomID)
 				h.scheduleTimer(p.roomID, snap)
 			}
@@ -372,6 +449,7 @@ func (h *Hub) handle(c *socket) {
 			err = errors.New("command not supported")
 		}
 		if err != nil {
+			diagnostic.Warn("websocket.operation_rejected", "reason", errorCode(err), "action", cmd.Type)
 			p.send(map[string]string{"type": "error", "code": errorCode(err)})
 		}
 	}

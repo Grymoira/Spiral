@@ -2,7 +2,7 @@
 
 The original SyncMusic research described Phase 0–7, but no corresponding source files existed in this Spiral repository at initialization. These are the milestone mappings for work going forward; completing a source file is not equivalent to validating the milestone.
 
-- [ ] **Phase 0 / Milestone A — reproducible baseline.** Go room core and HTTP development server, tests, initial Qt local audio player and CMake/CI scaffolding are implemented. Go baseline tested on Linux. Qt client build and runtime, Windows/macOS builds, and audio test remain unverified. A follow-up review hardened loopback binding, JSON validation, method responses and CMake missing-toolchain behavior; local Go tests and the Linux server-only build pass.
+- [ ] **Phase 0 / Milestone A — reproducible baseline.** Go room core and HTTP development server, tests, initial Qt local audio player and CMake/CI scaffolding are implemented. Go baseline tested on Linux. Qt Linux build passed CI 40364849956; runtime, Windows/macOS builds and audio tests remain unverified. A follow-up review hardened loopback binding, JSON validation, method responses and CMake missing-toolchain behavior; local Go tests and the Linux server-only build pass.
 - [ ] **Phase 1 / Milestone B — audio capability experiment.** Measure local playback, seek, actual playback rate support, buffer and output timing; document backend limitations with test audio.
 - [ ] **Phase 2 / Milestone C — sync protocol v1.** Finalize authenticated WSS, versioned contract, room authority, track identity, monotonic clocks, readiness barrier, scheduling and error semantics; executable Go/C++ contract tests.
 - [ ] **Phase 3 / Milestone D — two-client synchronization.** Connect two client instances, load identical verified test audio, measure scheduling/drift, handle pause/seek/reconnect; then real devices and audio measurement.
@@ -19,5 +19,20 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [x] Implement Qt Quick source connecting to the coordinator with local file verification, clock estimates and scheduled playback (not yet compiled).
 - [x] Test two independent WebSocket clients against one server, checking shared event deadline, access control and state transitions.
 - [x] Add the first-party MIT license (third-party dependencies retain their own licenses).
-- [ ] **Next required acceptance:** compile/run Qt client with Qt 6.8+ on a supported OS, fix any QML/runtime errors, and perform two physical-device audio capture tests with quantified P50/P95/max alignment error.
+- [ ] **Next required acceptance:** run the CI-built Qt client on a supported OS, fix any QML/runtime errors, and perform two physical-device audio capture tests with quantified P50/P95/max alignment error.
 - [ ] Add authenticated WSS deployment soak tests, reconnection/clock regression tests, bounded state and per-IP abuse controls, and end-user packaging.
+
+## 2026-10-27: correctness and observability increment
+
+- [x] Revoke stale scheduled play on Ready loss and late joins; defend at commit.
+- [x] Bound WebSocket sockets per IP and globally; reject superseded sessions.
+- [x] Define a privacy-preserving JSONL logging schema for Go and Qt desktop.
+- [x] Add regression coverage and request Qt headless startup verification in CI.
+- [ ] Validate the QML runtime on CI (must check new workflow result), then on
+      real Windows, Linux and macOS desktop devices.
+- [ ] Add explicit ARM/ACK/COMMIT with cancellation/partition semantics before
+      claiming reliable simultaneous acoustic output.
+- [ ] Design chat/danmaku as a separate authenticated and rate-limited feature
+      once multi-device audio reliability is demonstrated.
+- [ ] Strengthen public deployment security (identity/rate limits, reverse proxy,
+      abuse testing, secret rotation and operational incident controls).

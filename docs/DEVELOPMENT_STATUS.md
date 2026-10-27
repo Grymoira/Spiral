@@ -102,3 +102,44 @@ Verification:
 - **Not executed:** Qt 6.8+ build or QML runtime (Qt SDK absent), two physical devices, TLS on a public Internet host, real acoustic alignment or sample-level latency/error measurements.
 
 **Milestone interpretation:** this is a practical first slice of Phase 2/3 (synchronization protocol and two-socket transport), not completion of Phase 2/3 acceptance. The earlier `docs/adr/0001-loopback-bootstrap.md` remains a historical account of the original HTTP-only baseline; see `docs/adr/0002-coordinated-realtime-sync.md` for the new transport direction.
+
+## Stability and observability follow-up — 2026-10-27
+
+Baseline: `main` commit `0978f248e7ccdd5ea4ee559e2f22363a79427a2d`.
+A remote GitHub Actions run (40364849956) had completed successfully,
+including the Linux Qt 6.8.3 desktop **compile** and Go tests. That is not
+proof of end-to-end audio output or production readiness.
+
+Corrections implemented in this increment:
+
+- Cancel scheduled playing-state transitions when any member revokes Ready or
+  when a newly joining member has not prepared the current recording; repeat
+  the readiness check at the event commit deadline. Preserve safe pending pause
+  actions. Disconnects invalidate readiness and cancel pending play.
+- Enforce a global and per-client-IP concurrent WebSocket capacity budget to
+  reduce unauthenticated connection exhaustion, and reject frames from a
+  connection superseded by a later login of the same member.
+- Add JSONL event logging to the server and a bounded, rotated, allowlisted
+  local event journal to the desktop client. Fixed route/event codes do not
+  include tokens, invites, media paths, raw URLs, request bodies or messages.
+  See `docs/LOGGING.md` for schema, correlation and retention behavior.
+- Extend CI to attempt launching the compiled Qt QML desktop in a virtual
+  display, rather than treating compilation alone as a runtime smoke test.
+- Add regression tests for readiness cancellation, stale timers, concurrent
+  WebSocket admission, superseded-session fencing and log schema/redaction.
+
+Local Linux verification (Go 1.23.2) for this change:
+
+- `go vet ./...` — PASS.
+- `go test -race -count=2 ./...` — PASS.
+- Go tests include real network WebSocket integration tests and expiry logic.
+- Server-only CMake and CTest results and Qt CI outcome are reported separately
+  when actually run; do not infer acoustic accuracy from either test suite.
+
+**Not delivered:** Full ARM/ACK/COMMIT two-phase playback agreement; physical
+multi-device acoustic output measurement; durable rate limits, WAF/reverse
+proxy review and comprehensive public-host attack testing; chat/danmaku;
+macOS/Windows end-user installers. Under network partitioning a previously
+received scheduled command can still be executed by a client before it sees a
+cancellation; the system therefore does not guarantee atomic simultaneous
+playback. This is not a final Release candidate.
