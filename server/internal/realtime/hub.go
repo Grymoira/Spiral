@@ -258,7 +258,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		"arm_ack":     {"type", "trackId", "trackGeneration", "eventId"},
 		"cancel_ack":  {"type", "roomEpoch", "trackGeneration", "eventId", "stateRevision"},
 		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
-		"snapshot":    {"type"},
+		"snapshot":    {"type", "operationId"},
 	}
 	keys, ok := allowed[m.Type]
 	if !ok {
@@ -287,7 +287,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 			return envelope{}, errors.New("unexpected field for action")
 		}
 	}
-	if m.Type == "track" || m.Type == "schedule" {
+	if m.Type == "track" || m.Type == "schedule" || m.Type == "snapshot" {
 		if len(m.OperationID) < 8 || len(m.OperationID) > 64 {
 			return envelope{}, errors.New("invalid operation identifier")
 		}
@@ -577,7 +577,7 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			if err == nil {
 				// A unicast response. Do not mutate revision or rebroadcast
 				// everyone else's state for a single peer's recovery request.
-				p.send(map[string]any{"type": "snapshot", "state": snap})
+				p.send(map[string]any{"type": "snapshot", "operationId": cmd.OperationID, "state": snap})
 			}
 		case "clock_probe":
 			if len(cmd.ProbeID) == 0 || len(cmd.ProbeID) > 64 || cmd.C0 < 0 {
