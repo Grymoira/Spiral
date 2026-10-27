@@ -24,7 +24,7 @@ function extractFunction(name) {
 }
 const functions = [
     "receiveClock", "armPending", "pendingUsable", "deferPending",
-    "executePending", "reconcile",
+    "acknowledgeArming", "executePending", "reconcile",
     "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extractFunction).join("\n");
 
@@ -45,14 +45,14 @@ function scenario() {
         authenticated: true, clockReady: true, clockSamples: 3,
         clockOffsetMs: 0, bestRttMs: 1000000, lastClockSampleMs: 0,
         clockEpoch: "epoch", pendingProbes: {},
-        scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "",
+        scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
         maxLatePlayMs: 250, selectedHash: hash, memberId: "owner",
         lastCorrectionMs: -100000, logText: "",
         roomState: {
             playback: {
                 trackId: hash, trackGeneration: 1, durationMs: 10000,
                 playState: "paused", anchorMediaMs: 0, anchorServerMs: 0,
-                pending: {id: 7, executeServerMs: 5000, mediaMs: 0, playState: "playing"}
+                pending: {id: 7, phase: "committed", executeServerMs: 5000, mediaMs: 0, playState: "playing"}
             },
             members: [{id: "owner", ready: true}]
         },

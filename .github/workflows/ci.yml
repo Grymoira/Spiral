@@ -60,6 +60,8 @@ jobs:
         run: node client/tests/control_idempotency.test.cjs
       - name: QML pending playback recovery regressions
         run: node client/tests/pending_recovery.test.cjs
+      - name: QML event arming and commitment regressions
+        run: node client/tests/arming_protocol.test.cjs
       - name: Transport URL and redirect security regressions
         run: |
           ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy

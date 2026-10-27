@@ -18,6 +18,7 @@ var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const maxTrackDurationMs int64 = 24 * 60 * 60 * 1000
 const scheduleLeadMs int64 = 2500
+const armTimeoutMs int64 = 5000
 const maxRememberedOperations = 64
 
 type Playback struct {
@@ -31,12 +32,14 @@ type Playback struct {
 }
 
 type ScheduledEvent struct {
-	ID              uint64 `json:"id"`
-	Action          string `json:"action"`
-	TrackGeneration uint64 `json:"trackGeneration"`
-	ExecuteServerMs int64  `json:"executeServerMs"`
-	MediaMs         int64  `json:"mediaMs"`
-	PlayState       string `json:"playState"`
+	ID                 uint64 `json:"id"`
+	Action             string `json:"action"`
+	TrackGeneration    uint64 `json:"trackGeneration"`
+	ExecuteServerMs    int64  `json:"executeServerMs"`
+	MediaMs            int64  `json:"mediaMs"`
+	PlayState          string `json:"playState"`
+	Phase              string `json:"phase"`
+	ArmExpiresServerMs int64  `json:"armExpiresServerMs,omitempty"`
 }
 
 // ServerMs uses a process-local monotonic epoch, distinct from wall clock timestamps.
@@ -169,7 +172,7 @@ func (s *Store) ControlSchedule(roomID, token, action string, mediaMs int64,
 	if expectedRevision != r.revision {
 		return Snapshot{}, false, ErrRevisionConflict
 	}
-	if err := s.scheduleLocked(r, action, mediaMs); err != nil {
+	if err := s.scheduleLocked(r, action, mediaMs, true); err != nil {
 		return Snapshot{}, false, err
 	}
 	r.rememberOperation(operationID, receipt)
@@ -206,6 +209,7 @@ func (s *Store) setTrackLocked(r *room, hash string, durationMs int64, reload bo
 	r.playback.AnchorMediaMs = 0
 	r.playback.AnchorServerMs = s.ServerMs()
 	r.playback.Pending = nil
+	r.armingAcks = nil
 	for k, member := range r.members {
 		member.member.Ready = false
 		r.members[k] = member
@@ -223,6 +227,7 @@ func (s *Store) cancelUnreadyPlaybackLocked(r *room) bool {
 	for _, m := range r.members {
 		if !m.member.Ready {
 			r.playback.Pending = nil
+			r.armingAcks = nil
 			return true
 		}
 	}
@@ -273,7 +278,7 @@ func (s *Store) Schedule(roomID, token, action string, mediaMs int64) (Snapshot,
 	if m.member.Role != "host" {
 		return Snapshot{}, ErrForbidden
 	}
-	if err := s.scheduleLocked(r, action, mediaMs); err != nil {
+	if err := s.scheduleLocked(r, action, mediaMs, false); err != nil {
 		return Snapshot{}, err
 	}
 	return s.snapshot(r), nil
@@ -281,7 +286,7 @@ func (s *Store) Schedule(roomID, token, action string, mediaMs int64) (Snapshot,
 
 // scheduleLocked is shared with the protocol path guarded by expectedRevision.
 // Caller holds Store.mu; never allocate an event for a rejected command.
-func (s *Store) scheduleLocked(r *room, action string, mediaMs int64) error {
+func (s *Store) scheduleLocked(r *room, action string, mediaMs int64, requireArming bool) error {
 	if r.playback.TrackID == "" {
 		return ErrNoTrack
 	}
@@ -307,12 +312,95 @@ func (s *Store) scheduleLocked(r *room, action string, mediaMs int64) error {
 		mediaMs = mediaAt(r.playback, at)
 	}
 	r.nextEvent++
-	r.playback.Pending = &ScheduledEvent{
+	event := &ScheduledEvent{
 		ID: r.nextEvent, Action: action, TrackGeneration: r.playback.TrackGeneration,
-		ExecuteServerMs: at, MediaMs: mediaMs, PlayState: next,
+		ExecuteServerMs: at, MediaMs: mediaMs, PlayState: next, Phase: "committed",
 	}
+	r.armingAcks = nil
+	if requireArming && next == "playing" {
+		// No executable deadline is shared before every member ACKs this event.
+		event.Phase = "arming"
+		event.ExecuteServerMs = 0
+		event.ArmExpiresServerMs = s.ServerMs() + armTimeoutMs
+		r.armingAcks = make(map[string]bool, len(r.members))
+	}
+	r.playback.Pending = event
 	r.revision++
 	return nil
+}
+
+// AcknowledgeArming is an event-scoped, member-authenticated barrier. Only
+// the final distinct ACK creates the shared executable deadline.
+func (s *Store) AcknowledgeArming(roomID, token, trackID string, generation, eventID uint64) (Snapshot, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, member, err := s.authorized(roomID, token)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	e := r.playback.Pending
+	if e == nil || e.ID != eventID || e.TrackGeneration != generation ||
+		trackID != r.playback.TrackID || e.PlayState != "playing" {
+		return Snapshot{}, false, ErrInvalidState
+	}
+	if e.Phase == "committed" {
+		return s.snapshot(r), false, nil
+	}
+	if e.Phase != "arming" || s.ServerMs() >= e.ArmExpiresServerMs || !member.member.Ready {
+		return Snapshot{}, false, ErrInvalidState
+	}
+	if r.armingAcks[member.member.ID] {
+		return s.snapshot(r), false, nil
+	}
+	r.armingAcks[member.member.ID] = true
+	for _, m := range r.members {
+		if !m.member.Ready || !r.armingAcks[m.member.ID] {
+			return s.snapshot(r), false, nil
+		}
+	}
+	e.Phase = "committed"
+	e.ExecuteServerMs = s.ServerMs() + scheduleLeadMs
+	// A play command issued during existing playback must project its media
+	// anchor to the NEW deadline, not the provisional ARM creation time.
+	if e.Action != "seek" {
+		e.MediaMs = mediaAt(r.playback, e.ExecuteServerMs)
+	}
+	e.ArmExpiresServerMs = 0
+	r.armingAcks = nil
+	r.revision++
+	return s.snapshot(r), true, nil
+}
+
+// ExpireArming cancels an unacknowledged play before it becomes executable.
+func (s *Store) ExpireArming(roomID string, eventID uint64) (Snapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil || !s.purgeExpired(r) || r.playback.Pending == nil {
+		return Snapshot{}, false
+	}
+	e := r.playback.Pending
+	if e.ID != eventID || e.Phase != "arming" || s.ServerMs() < e.ArmExpiresServerMs {
+		return Snapshot{}, false
+	}
+	r.playback.Pending = nil
+	r.armingAcks = nil
+	r.revision++
+	return s.snapshot(r), true
+}
+
+// Timer setup must fence the entire event phase and deadline, not only its ID.
+func (s *Store) PendingMatchesExact(roomID string, expected ScheduledEvent) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.rooms[roomID]
+	if r == nil || r.playback.Pending == nil {
+		return false
+	}
+	e := r.playback.Pending
+	return e.ID == expected.ID && e.TrackGeneration == expected.TrackGeneration &&
+		e.Phase == expected.Phase && e.ExecuteServerMs == expected.ExecuteServerMs &&
+		e.ArmExpiresServerMs == expected.ArmExpiresServerMs
 }
 
 // CommitEvent is idempotent and refuses stale/replaced events.
@@ -324,7 +412,7 @@ func (s *Store) CommitEvent(roomID string, eventID uint64) (Snapshot, bool) {
 		return Snapshot{}, false
 	}
 	e := r.playback.Pending
-	if e == nil || e.ID != eventID || e.TrackGeneration != r.playback.TrackGeneration || s.ServerMs() < e.ExecuteServerMs {
+	if e == nil || e.Phase != "committed" || e.ID != eventID || e.TrackGeneration != r.playback.TrackGeneration || s.ServerMs() < e.ExecuteServerMs {
 		return Snapshot{}, false
 	}
 	// Recheck the barrier immediately before commit, not only at scheduling.
@@ -336,6 +424,7 @@ func (s *Store) CommitEvent(roomID string, eventID uint64) (Snapshot, bool) {
 	r.playback.AnchorMediaMs = e.MediaMs
 	r.playback.AnchorServerMs = e.ExecuteServerMs
 	r.playback.Pending = nil
+	r.armingAcks = nil
 	r.revision++
 	return s.snapshot(r), true
 }

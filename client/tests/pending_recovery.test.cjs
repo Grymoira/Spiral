@@ -20,7 +20,7 @@ function extract(name) {
     throw new Error("unclosed function: " + name);
 }
 const funcs = [
-    "armPending", "pendingUsable", "deferPending", "executePending",
+    "armPending", "pendingUsable", "deferPending", "acknowledgeArming", "executePending",
     "reconcile", "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extract).join("\n");
 
@@ -42,10 +42,10 @@ function scenario() {
         roomState: {playback: {
             trackId: hash, trackGeneration: 1, durationMs: 10000,
             playState: "paused", anchorMediaMs: 0, anchorServerMs: 0,
-            pending: {id: 7, executeServerMs: 5000, mediaMs: 0, playState: "playing"}
+            pending: {id: 7, phase: "committed", executeServerMs: 5000, mediaMs: 0, playState: "playing"}
         }, members: [{id: "owner", ready: true}]},
         selectedHash: hash, memberId: "owner",
-        scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "",
+        scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
         maxLatePlayMs: 250, lastCorrectionMs: -100000,
         player, playbackTimer: timer,
         MediaPlayer: {LoadedMedia: 1, BufferedMedia: 2, PlayingState: 2},
@@ -138,7 +138,7 @@ function scenario() {
     fire();
     context.roomState.playback.trackGeneration = 2;
     context.roomState.playback.pending = {
-        id: 8, executeServerMs: 7000, mediaMs: 0, playState: "playing"
+        id: 8, phase: "committed", executeServerMs: 7000, mediaMs: 0, playState: "playing"
     };
     context.reconcile();
     player.mediaStatus = 1;

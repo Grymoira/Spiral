@@ -281,3 +281,29 @@ schedule are preserved. Tests exercise deadline callbacks, authentication
 boundary, invalid frames, outbound Pong and control floods without a
 75-second wall-clock wait. This is a transport keepalive fix, not a
 guarantee of network connectivity or end-to-end audio synchronization.
+
+## Issue #11 — software arming barrier (partial milestone; 2026-10-27)
+
+This is a safety/protocol milestone, **not closure of Issue #11**. WebSocket
+`play` and `seek` while the room is already playing now advertise a pending
+`phase:"arming"` event with **no executable deadline**. Each authenticated
+current Ready member must acknowledge the precise track generation and event
+ID after the local recording, loaded media, and clock calibration are valid.
+The server records ACKs under Store.mu and publishes `phase:"committed"` with
+a new, shared deadline at least 2,500 ms ahead only once all members ACK.
+An arming event with a missing ACK is canceled after 5 seconds.
+
+A canceled/replaced event, stale generation, revoked Ready or replaced
+connection cannot independently authorize playback. Client QML refuses to
+execute any pending event whose phase is not `committed`. Paused-state
+commands retain the earlier direct scheduling behavior. The internal
+Store.Schedule helper remains backward compatible for in-process tests;
+public WebSocket schedule commands use the new ACK barrier.
+
+An ARM ACK confirms only application-level preparedness to receive COMMIT,
+NOT DAC start, audible output or actual timeline alignment. Network partitions
+after COMMIT, delayed server cancellation and audio driver buffering can still
+produce divergent playback. End-to-end Qt multimedia output testing,
+cancellation acknowledgement, physical two-device acoustical P50/P95/max
+measurement with agreed tolerances, platform suspend/reconnect and partition
+testing are still REQUIRED for Issue #11. No Release-level accuracy claim.

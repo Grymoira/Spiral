@@ -39,6 +39,7 @@ ApplicationWindow {
     property string scheduledKey: ""
     property string deferredPendingKey: ""
     property string finishedPendingKey: ""
+    property string armSentKey: ""
     // A late playing-state appointment must wait for the authoritative
     // committed snapshot rather than starting from an expired local timer.
     readonly property int maxLatePlayMs: 250
@@ -94,6 +95,7 @@ ApplicationWindow {
         scheduledKey = ""
         deferredPendingKey = ""
         finishedPendingKey = ""
+        armSentKey = ""
         readySentKey = ""
         roomState = ({})
         pendingControl = null
@@ -139,6 +141,7 @@ ApplicationWindow {
         scheduledKey = ""
         deferredPendingKey = ""
         finishedPendingKey = ""
+        armSentKey = ""
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
         var base = syncTools.validatedServerBase(serverUrl)
@@ -289,9 +292,20 @@ ApplicationWindow {
             syncTools.logEvent("client.playback_deferred")
         }
     }
+    // An ARM snapshot has no executable deadline. Acknowledge a concrete
+    // event only after the current local recording and clock are usable.
+    function acknowledgeArming(p) {
+        if (!p.pending || p.pending.phase !== "arming") return
+        var key = String(p.trackGeneration) + ":" + p.pending.id
+        if (!authenticated || !clockReady || !sameRecording() || !mediaLoaded() || !ownReady()) return
+        if (armSentKey === key || socket.status !== WebSocket.Open) return
+        armSentKey = key
+        send({type:"arm_ack", trackId:p.trackId,
+              trackGeneration:p.trackGeneration, eventId:p.pending.id})
+    }
     function executePending() {
         var p = roomState.playback
-        if (!p || !p.pending) return
+        if (!p || !p.pending || p.pending.phase !== "committed") return
         var key = String(p.trackGeneration) + ":" + p.pending.id
         // A stopped timer or a completed event must never execute again.
         if (scheduledKey !== key || finishedPendingKey === key) return
@@ -336,6 +350,18 @@ ApplicationWindow {
         var p = roomState.playback
         if (p.pending) {
             var key = String(p.trackGeneration) + ":" + p.pending.id
+            if (p.pending.phase === "arming") {
+                if (scheduledKey !== "") playbackTimer.stop()
+                scheduledKey = ""
+                deferredPendingKey = ""
+                acknowledgeArming(p)
+                return
+            }
+            if (p.pending.phase !== "committed") {
+                playbackTimer.stop()
+                scheduledKey = ""
+                return
+            }
             if (finishedPendingKey === key) return
             if (!pendingUsable(p)) {
                 deferPending(key)
@@ -354,6 +380,7 @@ ApplicationWindow {
         scheduledKey = ""
         deferredPendingKey = ""
         finishedPendingKey = ""
+        armSentKey = ""
         if (!clockReady || !sameRecording() || !mediaLoaded()) return
         var position = predictedPosition(p)
         if (p.playState === "playing") {
@@ -406,6 +433,7 @@ ApplicationWindow {
                 window.clockReady = false
                 window.readySentKey = ""
                 window.scheduledKey = ""
+                window.armSentKey = ""
                 playbackTimer.stop()
                 player.pause() // Conservative policy: do not free-run while disconnected.
                 if (window.roomId !== "") window.logText = "Connection lost; retrying"
@@ -422,6 +450,7 @@ ApplicationWindow {
                 window.bestRttMs = 1000000
                 window.clockSamples = 0
                 window.pendingProbes = ({})
+                window.armSentKey = ""
                 window.probeClock()
                 // Resend the same operation ID after reconnect; never create a
                 // second event if the first command was already accepted.
@@ -439,6 +468,7 @@ ApplicationWindow {
                     window.scheduledKey = ""
                     window.deferredPendingKey = ""
                     window.finishedPendingKey = ""
+                    window.armSentKey = ""
                     playbackTimer.stop()
                     player.pause()
                     window.probeClock()
@@ -475,6 +505,7 @@ ApplicationWindow {
             window.clockSamples = 0
             window.bestRttMs = 1000000
             window.scheduledKey = ""
+            window.armSentKey = ""
             playbackTimer.stop()
             player.pause()
             syncTools.logEventLevel("client.clock_expired", "WARN")
