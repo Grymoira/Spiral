@@ -434,6 +434,13 @@ func TestRESTLeaveFencesCommittedPlayAndNotifiesRemainingSocket(t *testing.T) {
 		uint64(notice["stateRevision"].(float64)) != uint64(state(canceled)["stateRevision"].(float64)) {
 		t.Fatalf("missing event-scoped cancellation notice: %v", state(canceled))
 	}
+	// Deliberately omit the cancellation ACK first. Even though the
+	// departed guest no longer belongs to the room and host is Ready,
+	// the previous shared-play appointment remains unconfirmed.
+	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
+	if blocked := h.until(t, "error", nil); blocked["code"] != "cancellation_pending" {
+		t.Fatalf("play was allowed before cancellation receipt: %+v", blocked)
+	}
 	ack := map[string]any{
 		"type":            "cancel_ack",
 		"roomEpoch":       state(canceled)["roomEpoch"],
@@ -456,6 +463,17 @@ func TestRESTLeaveFencesCommittedPlayAndNotifiesRemainingSocket(t *testing.T) {
 	h.send(t, ack)
 	if m := h.until(t, "error", nil); m["code"] != "invalid_state" {
 		t.Fatalf("forged cancellation ACK was accepted: %+v", m)
+	}
+	// Once the sole surviving member has acknowledged cancellation,
+	// a new ARM can be issued without reviving the original stale timer.
+	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
+	rescheduled := h.until(t, "snapshot", func(m map[string]any) bool {
+		p := playback(m)["pending"]
+		return p != nil && p.(map[string]any)["phase"] == "arming" &&
+			p.(map[string]any)["id"] != notice["eventId"]
+	})
+	if rescheduled["type"] != "snapshot" {
+		t.Fatalf("no new arming snapshot: %+v", rescheduled)
 	}
 	if _, committed := store.CommitEvent(host.RoomID, id); committed {
 		t.Fatal("stale future playing event committed after REST leave")
