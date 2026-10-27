@@ -98,14 +98,47 @@ type Store struct {
 	now           func() time.Time
 	started       time.Time
 	clockEpoch    string
+	// A coalesced wake-up, not a queue of identities or secrets. Producing a
+	// signal while holding Store.mu must never block on Hub processing.
+	expirySignal chan struct{}
 }
 
-func NewStore() *Store {
+func NewStore() *Store { return NewStoreWithClock(time.Now) }
+
+// NewStoreWithClock permits deterministic session-expiry tests. Callers must
+// supply a concurrency-safe clock; playback uses its own monotonic epoch.
+func NewStoreWithClock(now func() time.Time) *Store {
+	if now == nil {
+		panic("room clock cannot be nil")
+	}
 	epoch, err := randomToken(12)
 	if err != nil {
 		panic("cryptographic random unavailable")
 	}
-	return &Store{rooms: make(map[string]*room), now: time.Now, started: time.Now(), clockEpoch: epoch}
+	return &Store{rooms: make(map[string]*room), now: now, started: time.Now(),
+		clockEpoch: epoch, expirySignal: make(chan struct{}, 1)}
+}
+
+// ExpirationNotifications wakes the sole realtime hub after Store operations
+// prune expired members or destroy expired rooms. Receivers must fetch fresh
+// authoritative snapshots; the signal itself contains no session information.
+func (s *Store) ExpirationNotifications() <-chan struct{} { return s.expirySignal }
+
+func (s *Store) notifyExpiryLocked() {
+	select {
+	case s.expirySignal <- struct{}{}:
+	default:
+	}
+}
+
+// SweepExpired proactively enforces credential deadlines while active sockets
+// exist. It is safe to call concurrently with HTTP and WebSocket operations.
+func (s *Store) SweepExpired() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.rooms {
+		s.purgeExpired(r)
+	}
 }
 
 func randomToken(n int) (string, error) {
@@ -213,16 +246,19 @@ func (s *Store) create(source string, limited bool) (Credentials, error) {
 func (s *Store) purgeExpired(r *room) bool {
 	if !r.claimed && !s.now().Before(r.createdAt.Add(unclaimedRoomLifetime)) {
 		delete(s.rooms, r.id)
+		s.notifyExpiryLocked()
 		return false
 	}
 	for token, m := range r.members {
 		if !s.now().Before(m.expiresAt) {
 			if m.member.Role == "host" {
 				delete(s.rooms, r.id)
+				s.notifyExpiryLocked()
 				return false
 			}
 			delete(r.members, token)
 			r.revision++
+			s.notifyExpiryLocked()
 		}
 	}
 	return true

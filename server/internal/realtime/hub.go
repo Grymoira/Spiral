@@ -71,6 +71,7 @@ type Hub struct {
 	admitMu            sync.Mutex
 	activeSockets      int
 	socketsByIP        map[string]int
+	expiryStop         chan struct{} // protected by admitMu; only while sockets exist
 }
 
 func NewHub(s *rooms.Store) *Hub {
@@ -92,6 +93,11 @@ func (h *Hub) acquireSocket(remote string) (func(), bool) {
 	if h.activeSockets >= maxOpenWebSockets || h.socketsByIP[ip] >= maxWebSocketsPerIP {
 		return nil, false
 	}
+	if h.activeSockets == 0 {
+		stop := make(chan struct{})
+		h.expiryStop = stop
+		go h.expiryLoop(stop)
+	}
 	h.activeSockets++
 	h.socketsByIP[ip]++
 	return func() {
@@ -102,7 +108,47 @@ func (h *Hub) acquireSocket(remote string) (func(), bool) {
 		if h.socketsByIP[ip] == 0 {
 			delete(h.socketsByIP, ip)
 		}
+		if h.activeSockets == 0 {
+			close(h.expiryStop)
+			h.expiryStop = nil
+		}
 	}, true
+}
+
+// Only one sweep goroutine per active Hub, regardless of room or socket count.
+// Never acquire Store.mu while holding Hub.mu; broadcasting obtains the current
+// snapshots after the Store has already released its mutation lock.
+func (h *Hub) expiryLoop(stop <-chan struct{}) {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			h.Store.SweepExpired()
+		case <-h.Store.ExpirationNotifications():
+			// Snapshot changes are signaled under Store.mu, so receiving this
+			// signal never requires waiting on a callback that holds Hub.mu.
+			// Sweep again for nearby expirations before fan-out.
+			h.Store.SweepExpired()
+			h.broadcastActiveRooms()
+		}
+	}
+}
+
+func (h *Hub) broadcastActiveRooms() {
+	h.mu.Lock()
+	ids := make([]string, 0, len(h.clients))
+	for roomID := range h.clients {
+		ids = append(ids, roomID)
+	}
+	h.mu.Unlock()
+	for _, roomID := range ids {
+		// Broadcast closes revoked peers and sends current revision to the
+		// remaining members. It is safe if the room was deleted in the interim.
+		h.Broadcast(roomID)
+	}
 }
 
 func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {

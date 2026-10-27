@@ -46,3 +46,14 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Validate callback behavior with real Qt multimedia backends, buffering
       transitions and two physical machines; CI QML timer fakes alone do not
       demonstrate synchronized acoustic playback (see #11).
+
+## 2026-10-27: live session expiry propagation
+
+- [x] Coalesce expiration notifications from authoritative Store cleanup and
+      broadcast current room revision to connected members.
+- [x] Run one bounded housekeeping loop while the Hub has admitted sockets;
+      shut it down when no sockets remain.
+- [x] Close room sockets when the host expires; reject revoked guest tokens.
+- [ ] Longer-lived sessions require explicit authenticated renewal and
+      cross-process expiry event propagation if using more than one server
+      instance; the current in-memory prototype remains single-process.

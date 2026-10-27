@@ -237,3 +237,26 @@ synchronization accuracy.
 CI exercises the actual shipped QML functions under deterministic fake timer,
 media, clock, Ready and snapshot conditions. Physical Qt multimedia/device
 testing and true acoustic end-to-end timing remain outstanding (see #11).
+
+## Live room expiry notifications — 2026-10-27
+
+Issue #29: expiration is no longer exclusively passive when WebSocket clients
+are connected. The room Store emits a nonblocking, coalesced expiry signal
+under its lock for each expiration-driven member removal or room closure;
+the signal carries no tokens, member names or room IDs. The Hub maintains
+exactly one 500 ms expiry sweep loop while any socket is admitted. On a
+signal it fetches fresh authoritative snapshots *after* releasing Store
+locks, broadcasts the updated member list/revision and closes revoked
+connections. Host expiry closes all sockets associated with the room.
+
+The expiry loop is stopped when the Hub has no admitted sockets, so inactive
+handlers do not accumulate permanent housekeeping goroutines. Session TTL,
+five-member capacity, token authorization, playback safety and transport
+policies remain unchanged. Notification is best effort within the local
+process (not an external durable event bus); actual network delivery timing
+depends on scheduling and connectivity.
+
+Tests use an injected, concurrency-safe clock for HTTP/WebSocket expiry,
+cover stale guest and host credentials, proactive sweeps, passive REST
+cleanup, and absence of duplicate revision bumps. Existing Go race and Qt
+CI remain release gates.
