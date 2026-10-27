@@ -147,3 +147,20 @@ acoustic synchronization.
 independently obtained **physical audio recordings**, scenario reports,
 validated hardware setup, fault-injection evidence and a reviewer-accepted
 summary exist. No CI green check substitutes for that acceptance.
+
+## 7. Manual host removal safety case (Issue #11, phase 9)
+
+After normal synchronized playback and a deliberately blackholed guest
+connection, induce an unacknowledged cancellation. Observe that a new play
+is rejected with `cancellation_pending` while the guest remains a member.
+Then manually remove that guest through the host UI. Preserve both machines'
+continuous audio captures and authoritative server logs; verify that the
+removed guest becomes audibly silent, records any excess sound tail and does
+not replay its old COMMIT after network recovery. Rejoin as a **new authenticated
+member** before any subsequent shared play and use a fresh ARM/ACK/COMMIT.
+
+This is a distinct safety/availability test; the absence of guest snapshots or
+presence of HTTP 204 **does not prove that its loudspeaker stopped**. Record
+the actual guest stop latency, interrupted segment, environment, packet-loss
+configuration and raw capture. Do not conflate the surviving host's new
+one-member room alignment with the former two-member session.
