@@ -298,3 +298,31 @@ control only—never send local file paths, media URLs or credentials.
 Offline acoustic acceptance tooling and its strict evidentiary boundary are
 in `tests/ACOUSTIC_ACCEPTANCE.md`. Application-level Ready/ACK and synthetic
 PCM test signals **do not** prove true acoustic output synchronization.
+
+### Silent-partition reauthorization fence (Issue #11, phase 8)
+
+A stalled authenticated WebSocket can remain in Qt's `Open` state while no
+new server state arrives. Before this change, the 2.5 s authority watchdog
+paused playback and invalidated clock calibration, but fresh `clock_reply`
+frames could restore calibration and reauthorize an **old playing snapshot**
+without any new room-state confirmation. Clock freshness is not state freshness.
+
+On watchdog expiry during an audible or queued playing transition, Qt now
+pauses locally, stops queued timers, clears obsolete playing-event bookkeeping
+and probe history, and explicitly sends `Ready(false)` even if its cached
+Ready key is already empty. While the socket remains Open it starts the
+existing correlated `snapshot` recovery protocol with one UUID and bounded
+retries. A merely fresh clock probe, broadcast snapshot, mismatched reply,
+or a matching snapshot still showing playing / pending play **cannot**
+release this fence. The server must first respond to that request with a
+nonplaying authoritative state; only then may recalibration and subsequent
+Ready checks resume. Socket disconnection uses the existing fresh-auth
+reconnect path, which revokes old server-side Ready.
+
+This is a **fail-closed availability trade-off**: a still-playing room
+requires an authoritative pause before a partitioned client can rejoin.
+A malicious or entirely unreachable coordinator cannot be forced to answer,
+and locally pausing a Qt player does not constitute measured DAC/acoustic
+silence. The 2.5 s timeout bounds *detection under an active timer*,
+not guaranteed physical stopping latency during OS suspend; the actual
+two-device and OS fault-injection evidence required by #11 is still absent.

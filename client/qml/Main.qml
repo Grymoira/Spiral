@@ -472,26 +472,46 @@ ApplicationWindow {
         return authenticated && clockReady && lastAuthorityReplyMs >= 0 &&
                 syncTools.monotonicMs() - lastAuthorityReplyMs <= authorityStaleAfterMs
     }
-    // Fail closed when a network partition leaves Qt WebSocket looking Open.
-    // This is a bounded local safety watchdog, not confirmed cancellation.
+    // An apparently Open WebSocket does not prove that its old playing
+    // snapshot is still authoritative after the server stops responding.
+    // Clock probes alone cannot release this fence: require a correlated,
+    // freshly read nonplaying snapshot just as for sleep/media recovery.
     function safeguardAuthority() {
         if (!guardClockContinuity()) return
-        if (!authenticated || !clockReady || !roomState.playback) return
+        if (!authenticated || !roomState.playback) return
+        if (!!wakeSnapshotId) return // Existing recovery gate owns the retries.
+        if (!clockReady) return
         var p = roomState.playback
         var audibleOrQueued = p.playState === "playing" ||
                 (p.pending && p.pending.phase === "committed" && p.pending.playState === "playing") ||
                 player.playbackState === MediaPlayer.PlayingState
         if (!audibleOrQueued || authorityFresh()) return
-        revokeReady()
+        // Ready(false) must be sent even if the local cached key was already
+        // cleared: the server may still believe that this member is Ready.
+        if (p.trackId) {
+            send({type:"ready", trackId:p.trackId,
+                  trackGeneration:p.trackGeneration, ready:false})
+        }
+        readySentKey = ""
         clockReady = false
         clockSamples = 0
         bestRttMs = 1000000
+        lastClockSampleMs = -1
+        lastAuthorityReplyMs = -1
+        pendingProbes = ({})
         playbackTimer.stop()
         scheduledKey = ""
+        deferredPendingKey = ""
+        finishedPendingKey = ""
         armSentKey = ""
         player.pause()
+        if (socket.status === WebSocket.Open) {
+            wakeSnapshotId = syncTools.newOperationId()
+            wakeSnapshotLastSentMs = -1
+            requestWakeSnapshot()
+        }
         syncTools.logEventLevel("client.authority_stale", "WARN")
-        logText = "Server confirmation stalled; playback paused pending a fresh clock"
+        logText = "Server confirmation stalled; playback paused until a correlated fresh room snapshot"
     }
     function pendingUsable(p) {
         return authenticated && clockReady && sameRecording() && mediaLoaded() &&
