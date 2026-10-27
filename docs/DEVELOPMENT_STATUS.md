@@ -330,3 +330,23 @@ packet-loss spikes may pause healthy peers and process suspension or Qt GUI
 event delays can extend the detection bound. The server cannot prove every
 partitioned device received an abort; physical multimedia buffering and
 two-device acoustic timing remain untested. Issue #11 remains OPEN.
+
+## Issue #11 phase 3: member-loss appointment fencing — 2026-10-27
+
+Starting from `main` `c15b6c35033e6ff4606cc8404e175f0f4b9706f4`,
+this incremental correction addresses the precise Store regressions in #41 and
+#42. On guest leave/expiry/join or Ready loss, pending playing appointments
+(including already-ACKed COMMIT appointments) are invalidated. If playback
+has already begun, suspension freezes the authoritative media anchor and
+drops an obsolete future pause projection, without deleting paused-state seek.
+
+Added Go Store regression tests for ARM/ACK/COMMIT then guest leave, expiry
+and join, plus emergency suspension before a scheduled pause and preservation
+of paused-state seek. The fix is fail-closed at the server; it does not
+guarantee canceled snapshots arrive at partitioned clients.
+
+**Verification status:** this GitHub-connector edit was not independently built
+locally. The pull request's GitHub Actions result must be inspected for actual
+Go race/vet/CTest and Qt build/QML test outcomes before merging. Explicit
+CANCEL receipt semantics, physical two-device audio measurements and real
+public-network partitions remain pending under #11.
