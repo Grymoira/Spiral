@@ -34,7 +34,8 @@ function setup() {
         WebSocket:{Open:1}, MediaPlayer:{PlayingState:2},
         roomState: state, scheduledKey:"1:7", deferredPendingKey:"1:7",
         armSentKey:"1:7", cancellationAckKey:"", cancellationAckConfirmedKey:"",
-        cancellationAckLastSentMs:-1, playbackTimer:timer, player,
+        cancellationAckLastSentMs:-1, wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
+        playbackTimer:timer, player,
         syncTools:{monotonicMs:()=>mock.now}
     };
     vm.createContext(c);

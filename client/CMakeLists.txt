@@ -2,6 +2,7 @@ qt_add_executable(spiral-client
     src/main.cpp
     src/synctools.cpp
     src/synctools.h
+    src/clockcontinuity.h
     src/transportpolicy.h
 )
 
@@ -31,4 +32,9 @@ if(BUILD_TESTING)
     target_include_directories(spiral-transport-policy-test PRIVATE src)
     target_link_libraries(spiral-transport-policy-test PRIVATE Qt6::Core Qt6::Network Qt6::Qml)
     add_test(NAME spiral-transport-policy COMMAND spiral-transport-policy-test)
+
+    add_executable(spiral-clock-continuity-test tests/clock_continuity_test.cpp)
+    target_include_directories(spiral-clock-continuity-test PRIVATE src)
+    target_link_libraries(spiral-clock-continuity-test PRIVATE Qt6::Core)
+    add_test(NAME spiral-clock-continuity COMMAND spiral-clock-continuity-test)
 endif()

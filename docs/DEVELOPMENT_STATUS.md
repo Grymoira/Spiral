@@ -403,3 +403,32 @@ protocol fault injection, not a real OS sleep, Wi-Fi partition or acoustic
 measurement. No guaranteed cancellation delivery or simultaneous DAC output
 is claimed. A nonresponding current member can intentionally block room play;
 there is no server eviction/recovery policy yet. Issue #11 must remain OPEN.
+
+## Issue #11 phase 6 — OS clock discontinuity + correlated resynchronization (2026-10-27)
+
+Baseline: `main` `33c244988676f61c0c1a07891f25e11d0a186017`.
+QElapsedTimer is monotonic but may not count sleep time on every supported
+platform. A skipped UI callback after suspend could therefore see a
+pre-suspend authority lease as fresh. A new Qt-native continuity detector
+compares elapsed monotonic and wall time; large divergence fails closed,
+withdraws Ready, stops media and one-shot timer, drops unanswered probes,
+and requests a new snapshot with an unpredictable, strictly validated ID.
+Only the matching *authenticated* unicast snapshot releases the client's
+recovery barrier, while the clock is recalibrated. Requests are retried
+with a 1.2 s minimum interval. The server's `snapshot` request, previously
+listed in the strict schema but unimplemented, now reads current Store
+state and returns a correlated snapshot without mutating room revision.
+
+Regression coverage: native Qt C++ clock-gap guard tests, shipped-QML
+function tests that inject sleep before timer fire and stale clock replies,
+and real Go WebSocket integration verifying authorized snapshot recovery,
+operation ID echo, updated revision and malformed-message rejection.
+CI runs these tests alongside Go race/vet/CTest and Qt compile/startup.
+
+**Verification boundary:** test results are defined by the PR and merged-main
+Actions runs and must not be reported successful until confirmed. Synthetic
+time divergence is *not* a literal Windows/macOS/Linux suspend test. The
+mechanism cannot prove acoustic silence, physical synchronization or
+guaranteed delivery under partitions. Two-device acoustic P50/P95/max,
+real suspend/reconnect, and fault tolerance acceptance remain required:
+Issue #11 stays OPEN.

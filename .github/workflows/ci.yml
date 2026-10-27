@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+# A source fix to a PR supersedes old checkout/test snapshots. Do not
+# consume multiple Qt SDK installations for commits we can no longer merge.
+# Keep main push validations independent; never cancel completed PR evidence.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   server:
     runs-on: ubuntu-latest
@@ -36,6 +43,24 @@ jobs:
       - name: Execute CTest
         run: ctest --preset server-only --output-on-failure
 
+  # These regressions execute shipping QML functions in isolated Node VMs
+  # without requiring Qt/apt installation. Keep the Qt job as an independent
+  # compilation, CTest and headless runtime gate.
+  qml-protocol:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run every source-derived QML and transport regression
+        run: |
+          set -eu
+          for suite in client/tests/*.test.cjs; do
+            echo "::group::$suite"
+            node "$suite"
+            echo "::endgroup::"
+          done
+
   desktop-qt:
     runs-on: ubuntu-24.04
     permissions:
@@ -66,9 +91,11 @@ jobs:
         run: node client/tests/authority_partition.test.cjs
       - name: QML cancellation receipt and replay regressions
         run: node client/tests/cancellation_receipt.test.cjs
+      - name: QML suspend/resume and correlated snapshot recovery regressions
+        run: node client/tests/sleep_resync.test.cjs
       - name: Transport URL and redirect security regressions
         run: |
-          ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy
+          ctest --test-dir build/dev --output-on-failure -R 'spiral-(transport-policy|clock-continuity)'
           node client/tests/transport_gate.test.cjs
       - name: Headless QML startup smoke test
         run: |

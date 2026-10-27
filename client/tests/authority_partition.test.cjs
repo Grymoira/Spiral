@@ -17,7 +17,7 @@ function extract(name) {
     throw new Error("unterminated " + name);
 }
 const code = [
-    "authorityFresh", "safeguardAuthority", "pendingUsable", "revokeReady",
+    "guardClockContinuity", "authorityFresh", "safeguardAuthority", "pendingUsable", "revokeReady",
     "armPending", "deferPending", "acknowledgeArming",
     "executePending", "reconcile", "sameRecording", "mediaLoaded",
     "ownReady", "predictedPosition", "receiveClock"
@@ -35,6 +35,7 @@ function scenario() {
         lastAuthorityReplyMs: 900, authorityStaleAfterMs: 2500,
         clockEpoch: "epoch", pendingProbes: {}, scheduledKey: "", armSentKey:"",
         deferredPendingKey:"", finishedPendingKey:"", readySentKey:hash+":1",
+        wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
         maxLatePlayMs:250, lastCorrectionMs:-100000,
         selectedHash:hash, memberId:"owner",
         roomState:{playback:{trackId:hash,trackGeneration:1,durationMs:10000,
@@ -43,6 +44,7 @@ function scenario() {
         player, playbackTimer:timer,
         MediaPlayer:{LoadedMedia:1,BufferedMedia:2,PlayingState:2},
         syncTools:{monotonicMs:()=>mock.now,
+            clockContinuityOk:()=>true,
             logEvent: event=>mock.logs.push(event),
             logEventLevel: event=>mock.logs.push(event)},
         send: m=>mock.sent.push(m), socket:{status:1},WebSocket:{Open:1},

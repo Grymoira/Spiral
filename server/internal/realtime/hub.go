@@ -258,7 +258,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		"arm_ack":     {"type", "trackId", "trackGeneration", "eventId"},
 		"cancel_ack":  {"type", "roomEpoch", "trackGeneration", "eventId", "stateRevision"},
 		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
-		"snapshot":    {"type"},
+		"snapshot":    {"type", "operationId"},
 	}
 	keys, ok := allowed[m.Type]
 	if !ok {
@@ -287,7 +287,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 			return envelope{}, errors.New("unexpected field for action")
 		}
 	}
-	if m.Type == "track" || m.Type == "schedule" {
+	if m.Type == "track" || m.Type == "schedule" || m.Type == "snapshot" {
 		if len(m.OperationID) < 8 || len(m.OperationID) > 64 {
 			return envelope{}, errors.New("invalid operation identifier")
 		}
@@ -464,6 +464,11 @@ func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, bool, error) 
 			cmd.OperationID, cmd.ExpectedRevision)
 	case "clock_probe":
 		return rooms.Snapshot{}, false, nil
+	case "snapshot":
+		// Authenticated, current WebSocket peers may explicitly re-read the
+		// authority after a sleep/wake discontinuity or missed broadcasts.
+		state, err := h.Store.Snapshot(p.roomID, p.token)
+		return state, false, err
 	default:
 		return rooms.Snapshot{}, false, errors.New("command not supported")
 	}
@@ -568,6 +573,12 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			return
 		}
 		switch cmd.Type {
+		case "snapshot":
+			if err == nil {
+				// A unicast response. Do not mutate revision or rebroadcast
+				// everyone else's state for a single peer's recovery request.
+				p.send(map[string]any{"type": "snapshot", "operationId": cmd.OperationID, "state": snap})
+			}
 		case "clock_probe":
 			if len(cmd.ProbeID) == 0 || len(cmd.ProbeID) > 64 || cmd.C0 < 0 {
 				p.send(map[string]string{"type": "error", "code": "invalid_probe"})

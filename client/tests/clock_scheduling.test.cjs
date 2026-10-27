@@ -23,7 +23,7 @@ function extractFunction(name) {
     throw new Error("unterminated production function: " + name);
 }
 const functions = [
-    "receiveClock", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
+    "guardClockContinuity", "receiveClock", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
     "acknowledgeArming", "executePending", "reconcile",
     "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extractFunction).join("\n");
@@ -46,6 +46,7 @@ function scenario() {
         clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000, bestRttMs: 1000000, lastClockSampleMs: 0,
         clockEpoch: "epoch", pendingProbes: {},
         scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
+        wakeSnapshotId: "", wakeSnapshotLastSentMs: -1,
         maxLatePlayMs: 250, selectedHash: hash, memberId: "owner",
         lastCorrectionMs: -100000, logText: "",
         roomState: {
@@ -60,6 +61,7 @@ function scenario() {
         MediaPlayer: {LoadedMedia: 1, BufferedMedia: 2, PlayingState: 2},
         syncTools: {
             monotonicMs: () => mock.now,
+            clockContinuityOk: () => true,
             logEvent: () => {}
         },
         maybeReady: () => {}

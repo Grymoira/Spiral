@@ -15,7 +15,7 @@ function extract(name) {
     }
     throw Error("function never closes: " + name);
 }
-const code = ["acknowledgeArming", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
+const code = ["guardClockContinuity", "acknowledgeArming", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending",
     "executePending", "reconcile", "sameRecording", "mediaLoaded",
     "ownReady", "predictedPosition"].map(extract).join("\n");
 
@@ -32,6 +32,7 @@ function scene() {
     const context = {
         authenticated:true, clockReady:true, clockOffsetMs:0, lastAuthorityReplyMs:0, authorityStaleAfterMs:1000000, selectedHash:hash,
         memberId:"guest", armSentKey:"", scheduledKey:"", deferredPendingKey:"",
+        wakeSnapshotId:"", wakeSnapshotLastSentMs:-1,
         finishedPendingKey:"", maxLatePlayMs:250, lastCorrectionMs:-100000,
         socket:{status:1}, WebSocket:{Open:1}, send:m=>sent.push(m),
         roomState: {playback: {trackId:hash, trackGeneration:1,
@@ -41,7 +42,7 @@ function scene() {
             members:[{id:"guest", ready:true}]},
         player, playbackTimer:timer,
         MediaPlayer:{LoadedMedia:1, BufferedMedia:2, PlayingState:2},
-        syncTools:{monotonicMs:()=>clock.now, logEvent(){}}
+        syncTools:{monotonicMs:()=>clock.now, clockContinuityOk:()=>true, logEvent(){}}
     };
     vm.createContext(context);
     vm.runInContext(code, context, {filename:"client/qml/Main.qml"});

@@ -20,7 +20,7 @@ function extract(name) {
     throw new Error("unclosed function: " + name);
 }
 const funcs = [
-    "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending", "acknowledgeArming", "executePending",
+    "guardClockContinuity", "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending", "acknowledgeArming", "executePending",
     "reconcile", "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extract).join("\n");
 
@@ -46,11 +46,13 @@ function scenario() {
         }, members: [{id: "owner", ready: true}]},
         selectedHash: hash, memberId: "owner",
         scheduledKey: "", deferredPendingKey: "", finishedPendingKey: "", armSentKey: "",
+        wakeSnapshotId: "", wakeSnapshotLastSentMs: -1,
         maxLatePlayMs: 250, lastCorrectionMs: -100000,
         player, playbackTimer: timer,
         MediaPlayer: {LoadedMedia: 1, BufferedMedia: 2, PlayingState: 2},
         syncTools: {
             monotonicMs: () => mock.now,
+            clockContinuityOk: () => true,
             logEvent: event => mock.events.push(event)
         }
     };
