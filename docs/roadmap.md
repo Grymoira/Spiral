@@ -88,3 +88,12 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Implement verifiable cancellation receipt/partition semantics and
       perform real Qt playback, suspend/reconnect, fault injection and
       two-device acoustic P50/P95/max acceptance. Issue #11 remains OPEN.
+
+## Issue #11 phase 3: membership-loss pending-event fencing
+
+- [x] Revoke already committed playing appointments on guest leave, expiry and
+      join, regardless of the remaining members' Ready flags.
+- [x] Discard the obsolete future pause projection when emergency suspension
+      freezes active playback, preserving legitimate paused seeks.
+- [ ] Design event-scoped cancellation receipts, network fault injection and
+      cross-platform acoustic tests. Issue #11 stays open.
