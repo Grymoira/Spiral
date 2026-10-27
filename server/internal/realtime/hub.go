@@ -258,6 +258,7 @@ func (h *Hub) unregister(p *peer) {
 		h.Broadcast(p.roomID)
 	}
 }
+
 // clearReady is called with Hub.mu held, before registration or removal completes.
 // Lock ordering throughout Hub: Hub.mu before Store.mu.
 func (h *Hub) clearReady(p *peer) {
