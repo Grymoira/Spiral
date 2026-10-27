@@ -249,14 +249,29 @@ func (s *Store) SetReady(roomID, token, trackID string, generation uint64, ready
 	}
 	m.member.Ready = ready
 	r.members[token] = m
-	s.cancelUnreadyPlaybackLocked(r)
 	if !ready {
 		// A peer cannot continue coordinated playback after one member
 		// withdraws its readiness (buffering, disconnect, bad clock).
-		s.pausePlaybackLocked(r)
+		s.suspendPlaybackLocked(r)
 	}
 	r.revision++
 	return s.snapshot(r), nil
+}
+
+// suspendPlaybackLocked revokes playing appointments after a member is lost or
+// becomes unready, including those that have passed ARM/ACK but are not yet
+// executable. A forced pause also invalidates an old, future-projected pause:
+// otherwise its eventual commit would skip audio never actually played.
+// Safe paused-state seeks and already-paused commands are preserved.
+// Caller holds Store.mu; the outer membership/Ready mutation bumps revision.
+func (s *Store) suspendPlaybackLocked(r *room) {
+	wasPlaying := r.playback.PlayState == "playing"
+	if pending := r.playback.Pending; pending != nil &&
+		(pending.PlayState == "playing" || (wasPlaying && pending.Action == "pause")) {
+		r.playback.Pending = nil
+		r.armingAcks = nil
+	}
+	s.pausePlaybackLocked(r)
 }
 
 // pausePlaybackLocked freezes the authoritative audio position at the
