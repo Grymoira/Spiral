@@ -131,14 +131,17 @@ class AcousticHarnessTests(unittest.TestCase):
 
     def test_percentile_interpolation_and_signed_matching(self) -> None:
         self.assertEqual(percentile([0, 10, 20, 30, 40], 0.95), 38)
-        self.assertEqual(pair_onsets([1, 2], [0.985, 2.020], 50), [-15, 20])
+        signed = pair_onsets([1, 2], [0.985, 2.020], 50)
+        self.assertAlmostEqual(signed[0], -15, places=6)
+        self.assertAlmostEqual(signed[1], 20, places=6)
         self.assertEqual(pair_onsets([1], [1.500], 50), [])
 
     def test_bad_threshold_and_limits_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
             self.measure(self.normal, threshold=1.1)
         with self.assertRaises(ValueError):
-            self.measure(self.normal, limits=(20, 10, 30))
+            analyze(self.normal, expected_clicks=40, source_claim="synthetic",
+                    capture_method="synthetic", limits=(20, 10, 30))
 
 
 if __name__ == "__main__":
