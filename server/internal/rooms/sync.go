@@ -7,10 +7,10 @@ import (
 )
 
 var (
-	ErrNoTrack      = errors.New("no track selected")
-	ErrNotReady     = errors.New("room members are not ready")
-	ErrInvalidState = errors.New("invalid sync state")
-	ErrRevisionConflict = errors.New("room revision conflict")
+	ErrNoTrack           = errors.New("no track selected")
+	ErrNotReady          = errors.New("room members are not ready")
+	ErrInvalidState      = errors.New("invalid sync state")
+	ErrRevisionConflict  = errors.New("room revision conflict")
 	ErrOperationConflict = errors.New("operation identifier reused with different payload")
 )
 
@@ -69,19 +69,18 @@ func (s *Store) Authorize(roomID, token string) (Member, error) {
 	return m.member, nil
 }
 
-
 // Accepted operation receipts are retained per room across WebSocket reconnects.
 // The fixed retention cap bounds memory. Expired receipts cannot bypass revision
 // checks: a retry with an evicted key and stale expectedRevision is rejected.
 type controlReceipt struct {
-	memberID string
-	kind string
+	memberID         string
+	kind             string
 	expectedRevision uint64
-	hash string
-	duration int64
-	reload bool
-	action string
-	mediaMs int64
+	hash             string
+	duration         int64
+	reload           bool
+	action           string
+	mediaMs          int64
 }
 
 func (r *room) findOperation(id string, candidate controlReceipt) (bool, error) {

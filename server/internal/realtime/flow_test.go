@@ -23,8 +23,8 @@ import (
 
 type testConn struct {
 	net.Conn
-	rd *bufio.Reader
-	revision uint64
+	rd              *bufio.Reader
+	revision        uint64
 	commandSequence uint64
 }
 

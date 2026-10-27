@@ -16,21 +16,21 @@ import (
 )
 
 type envelope struct {
-	Type            string `json:"type"`
-	RoomID          string `json:"roomId,omitempty"`
-	SessionToken    string `json:"sessionToken,omitempty"`
-	ProbeID         string `json:"probeId,omitempty"`
-	C0              int64  `json:"c0,omitempty"`
-	SHA256          string `json:"sha256,omitempty"`
-	DurationMs      int64  `json:"durationMs,omitempty"`
-	TrackID         string `json:"trackId,omitempty"`
-	TrackGeneration uint64 `json:"trackGeneration,omitempty"`
-	Ready           bool   `json:"ready,omitempty"`
-	Action          string `json:"action,omitempty"`
-	MediaMs         int64  `json:"mediaMs,omitempty"`
-	OperationID     string `json:"operationId,omitempty"`
+	Type             string `json:"type"`
+	RoomID           string `json:"roomId,omitempty"`
+	SessionToken     string `json:"sessionToken,omitempty"`
+	ProbeID          string `json:"probeId,omitempty"`
+	C0               int64  `json:"c0,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
+	DurationMs       int64  `json:"durationMs,omitempty"`
+	TrackID          string `json:"trackId,omitempty"`
+	TrackGeneration  uint64 `json:"trackGeneration,omitempty"`
+	Ready            bool   `json:"ready,omitempty"`
+	Action           string `json:"action,omitempty"`
+	MediaMs          int64  `json:"mediaMs,omitempty"`
+	OperationID      string `json:"operationId,omitempty"`
 	ExpectedRevision uint64 `json:"expectedRevision,omitempty"`
-	Reload          bool   `json:"reload,omitempty"`
+	Reload           bool   `json:"reload,omitempty"`
 }
 
 type peer struct {
