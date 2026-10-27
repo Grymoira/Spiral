@@ -506,3 +506,25 @@ CI validation is pending until exact PR head and merged main workflows pass.
 guest has stopped its loudspeaker. Actual fail-closed disconnection capture,
 OS/network failure injection, thresholds and dual-device P50/P95/max remain
 mandatory before Issue #11 can be closed.
+
+## v0.1.0-preview.1 Windows x64 packaging and distribution gate (2026-10-27)
+
+A dedicated preview workflow builds the Qt 6.8.3 desktop client with MSVC
+2022 x64 and the Go loopback coordinator on a Windows runner. It collects
+runtime libraries, Qt QML modules and plugins with `windeployqt`, avoids
+bundling private media/credentials, includes Spiral/third-party license
+notices, tests packaged server `/healthz`, checks deployed desktop process
+liveness without Qt SDK on PATH, and publishes a checksummed ZIP. This is
+a proposed **GitHub Pre-release only**, created from a verified `main`
+commit once its release pipeline succeeds. The Windows startup check is a
+liveness probe, not an interactive GUI assertion; clean Windows, audio
+device/codec output and acoustic synchronization are not tested in CI.
+
+The accompanying `docs/PREVIEW_RELEASE_v0.1.0-preview.1.md` documents a
+portable ZIP for Windows x64, the official MSVC redistributable requirement,
+a localhost-only server, TLS-only cross-network testing and evidence
+collection. macOS/Linux installers, signed packages, real-device verification
+and full license audits across all deployed codecs are not claimed; leave
+Issue #12 open. Issue #11 is also open until independently captured acoustic
+P50/P95/max, network fault-injection and real OS suspend tests are accepted.
+Always report actual release/PR CI results instead of assuming success.

@@ -191,3 +191,17 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       persists (if at all) before its watchdog stops it.
 - [ ] Complete two-device Qt physical evidence and reviewed acoustic limits
       before closing #11.
+
+## Technical Windows x64 preview distribution (v0.1.0-preview.1)
+
+- [x] Add a reproducible Windows MSVC 2022 + Qt 6.8.3 build, Go coordinator,
+      Qt/QML plugin deployment, artifact checksum and GitHub pre-release gate.
+- [x] Add released-folder process startup and loopback server health checks,
+      native/Go/QML regressions and clear unsigned preview instructions.
+- [ ] Verify the downloadable ZIP on clean Windows 11 without Qt SDK,
+      including player UI and actual WAV output, before claiming Windows
+      install/run acceptance under Issue #12.
+- [ ] Build/distribute and validate macOS/Linux packages, third-party
+      codec/license manifest, signed/notarized packages and packaging matrix.
+- [ ] Complete Issue #11 physical stereo-clock onset, pause/seek and
+      network/suspend failure-injection acceptance before a stable release.

@@ -2,7 +2,7 @@
 
 A cross-platform experimental **multi-device synchronized local-audio player**. Every participant independently chooses the *same audio file*; the Go server coordinates authenticated rooms, clocks and scheduled playback commands. **Audio bytes are not relayed by the server.**
 
-> **Status: experimental development milestone, not a stable release.** Two independent WebSocket clients have been tested against the synchronization server. The Qt desktop client **compiled on Linux Qt 6.8.3 CI**, but headless GUI startup and real multi-device acoustic sync must still be verified. This is server-coordinated client-to-server networking, not device-to-device P2P NAT traversal.
+> **Status: experimental development milestone, not a stable release.** Two independent WebSocket clients have been tested against the synchronization server. The Qt desktop client **compiles and passes headless startup smoke tests on Linux Qt 6.8.3 CI**; real interactive device playback and multi-device acoustic sync remain unverified. A Windows x64 portable test-preview packaging workflow is available, but does not prove physical accuracy. This is server-coordinated client-to-server networking, not device-to-device P2P NAT traversal.
 
 ## Implemented now
 
@@ -56,8 +56,8 @@ The HTTPS/WSS path is available but **not production hardened** (no credential r
 - Audio timing uses Qt player-reported media position; no sound-card output-latency compensation or actual cross-device acoustic error measurements yet.
 - Clock offset uses four timestamps and an RTT filter; asymmetric network latency remains a source of systematic error. Inconsistent clocks/large delays can cause degraded synchronization.
 - Readiness is a client assertion based on file hash and local media-load state, not a server-side proof of decodability or identical audio output.
-- No simultaneous playback consensus (arm/ack/commit), fine-grained rate control, durable rooms, track queues, network music providers, NAT-traversing peer-to-peer sockets, or public deployment hardening. The server holds no music files or platform credentials.
-- Qt GUI runtime and actual sound measurements on Windows, Linux and macOS remain to be verified before offering end-user binaries or a formal Release.
+- Event-scoped ARM/ACK/COMMIT and cancellation receipts are implemented at the application layer, but these are **not physical acoustic output confirmations**. There is no proven simultaneous acoustic onset, fine-grained rate control, durable rooms, track queues, network music providers, NAT-traversing peer-to-peer sockets, or public deployment hardening. The server holds no music files or platform credentials.
+- Interactive Qt GUI and real sound measurements on Windows, Linux and macOS remain to be verified. Only a **clearly labeled Windows x64 technical test preview** is planned; do not treat that build as a signed/stable release or as Issue #11/#12 final acceptance.
 
 ## Documentation
 
@@ -66,6 +66,7 @@ The HTTPS/WSS path is available but **not production hardened** (no credential r
 - [Roadmap](docs/roadmap.md)
 - [Local bootstrap decision](docs/adr/0001-loopback-bootstrap.md)
 - [MIT License](LICENSE) and [third-party licensing notes](docs/LICENSING.md)
+- [Windows x64 technical preview and local test procedure](docs/PREVIEW_RELEASE_v0.1.0-preview.1.md)
 
 ## Structured event logs
 

@@ -1,0 +1,211 @@
+name: Windows x64 test preview
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-preview.yml'
+      - 'docs/PREVIEW_RELEASE_v0.1.0-preview.1.md'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/windows-preview.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spiral-windows-preview-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package-windows:
+    name: Build, deploy and smoke-test Windows x64
+    runs-on: windows-2022
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: server/go.mod
+          cache: false
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.8.3'
+          host: windows
+          target: desktop
+          arch: win64_msvc2022_64
+          modules: 'qtmultimedia qtwebsockets'
+          cache: false
+
+      - name: Configure Release (MSVC 2022 x64)
+        shell: pwsh
+        run: |
+          cmake -S . -B build/preview-win64 -G "Visual Studio 17 2022" -A x64 -DSPIRAL_BUILD_SERVER=OFF -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
+
+      - name: Compile Qt client and native tests
+        shell: pwsh
+        run: |
+          cmake --build build/preview-win64 --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "MSVC build failed" }
+
+      - name: Native CTest and shipped QML regression suites
+        shell: pwsh
+        run: |
+          ctest --test-dir build/preview-win64 -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { throw "Qt native tests failed" }
+          Get-ChildItem client/tests -Filter '*.test.cjs' | ForEach-Object {
+            node $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "QML regression failure: $($_.Name)" }
+          }
+          python -m unittest discover -v -s tools/tests -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { throw "Offline synthetic alignment tests failed" }
+
+      - name: Build and test Go coordinator
+        shell: pwsh
+        run: |
+          Push-Location server
+          try {
+            go vet ./...
+            if ($LASTEXITCODE -ne 0) { throw "Go vet failed" }
+            go test -count=1 ./...
+            if ($LASTEXITCODE -ne 0) { throw "Go tests failed" }
+          } finally { Pop-Location }
+
+      - name: Package Qt dependencies and Go coordinator
+        id: package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $label = "Spiral-v0.1.0-preview.1-windows-x64"
+          $stage = Join-Path $env:RUNNER_TEMP $label
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+          $client = "build/preview-win64/Release/spiral-client.exe"
+          if (-not (Test-Path $client)) { throw "Release client missing: $client" }
+          Copy-Item $client (Join-Path $stage "spiral-client.exe")
+          $deploy = Join-Path $env:QT_ROOT_DIR "bin/windeployqt.exe"
+          if (-not (Test-Path $deploy)) { throw "Qt deployment tool missing" }
+          & $deploy --release --no-compiler-runtime --qmldir (Join-Path $PWD "client/qml") (Join-Path $stage "spiral-client.exe")
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          foreach ($needed in @("Qt6Core.dll","Qt6Gui.dll","Qt6Qml.dll","Qt6Quick.dll","Qt6Multimedia.dll","Qt6WebSockets.dll","platforms/qwindows.dll")) {
+            if (-not (Test-Path (Join-Path $stage $needed))) { throw "Deployed Qt component missing: $needed" }
+          }
+          Push-Location server
+          try {
+            go build -trimpath -o (Join-Path $stage "spiral-server.exe") ./cmd/spiral-server
+            if ($LASTEXITCODE -ne 0) { throw "Go server release build failed" }
+          } finally { Pop-Location }
+          Copy-Item LICENSE (Join-Path $stage "LICENSE-Spiral-MIT.txt")
+          Copy-Item docs/PREVIEW_RELEASE_v0.1.0-preview.1.md (Join-Path $stage "README-PREVIEW.md")
+          Copy-Item docs/LICENSING.md (Join-Path $stage "THIRD-PARTY-NOTICES.md")
+          New-Item -ItemType Directory -Path (Join-Path $stage "LICENSES") | Out-Null
+          $lgpl = Join-Path $stage "LICENSES/LGPL-3.0.txt"
+          Invoke-WebRequest -Uri "https://www.gnu.org/licenses/lgpl-3.0.txt" -OutFile $lgpl
+          if (-not (Test-Path $lgpl) -or (Get-Item $lgpl).Length -lt 3000) { throw "LGPL text missing" }
+          @(
+            "Preview version: v0.1.0-preview.1"
+            "Source revision: $env:GITHUB_SHA"
+            "Qt 6.8.3 MSVC 2022 x64 dynamically deployed with windeployqt."
+            "Microsoft Visual C++ 2015-2022 Redistributable (x64) is REQUIRED."
+            "Qt runtime is third-party software; see LICENSES and THIRD-PARTY-NOTICES.md."
+          ) | Set-Content -Path (Join-Path $stage "BUILD-INFO.txt") -Encoding utf8
+          "STAGE_PATH=$stage" >> $env:GITHUB_ENV
+
+      - name: Test portable directory, without using Qt SDK paths
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = $env:STAGE_PATH
+          # Do not mask missing deployed plugins by exposing the Qt SDK during smoke tests.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot;$env:SystemRoot\System32\Wbem"
+          $env:QML_IMPORT_PATH = ""
+          $env:QML2_IMPORT_PATH = ""
+          $env:QT_PLUGIN_PATH = ""
+          $env:QT_QPA_PLATFORM_PLUGIN_PATH = ""
+          $env:QT_QML_IMPORT_PATH = ""
+          $env:QML_DISABLE_DISK_CACHE = "1"
+          $server = Start-Process -FilePath (Join-Path $stage "spiral-server.exe") -ArgumentList "-listen","127.0.0.1:18787" -PassThru -WindowStyle Hidden
+          try {
+            $healthy = $false
+            for ($i = 0; $i -lt 20; $i++) {
+              Start-Sleep -Milliseconds 300
+              try {
+                $response = Invoke-RestMethod -Uri "http://127.0.0.1:18787/healthz" -TimeoutSec 1
+                if ($response.status -eq "ok") { $healthy = $true; break }
+              } catch {}
+            }
+            if (-not $healthy) { throw "Packaged server failed health check" }
+          } finally {
+            if (-not $server.HasExited) { Stop-Process -Id $server.Id -Force }
+          }
+          $client = Start-Process -FilePath (Join-Path $stage "spiral-client.exe") -WorkingDirectory $stage -PassThru
+          try {
+            Start-Sleep -Seconds 6
+            $client.Refresh()
+            if ($client.HasExited) { throw "Packaged Qt client exited during startup: $($client.ExitCode)" }
+          } finally {
+            if (-not $client.HasExited) { Stop-Process -Id $client.Id -Force }
+          }
+          # Liveness is not a GUI-interaction, audio-device or clean-machine test.
+
+      - name: Archive and checksum tested portable directory
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          $name = "Spiral-v0.1.0-preview.1-windows-x64.zip"
+          $archive = Join-Path (Resolve-Path dist) $name
+          Compress-Archive -Path $env:STAGE_PATH -DestinationPath $archive -CompressionLevel Optimal
+          if (-not (Test-Path $archive) -or (Get-Item $archive).Length -lt 1048576) { throw "Invalid/empty release archive" }
+          $digest = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$digest *$name" | Set-Content -Path ("dist/" + $name + ".sha256") -Encoding ascii
+          Write-Host ("Archive size: " + (Get-Item $archive).Length)
+          Write-Host ("SHA-256: " + $digest)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spiral-preview-windows-x64
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-pre-release:
+    name: Publish experimental GitHub pre-release (main only)
+    needs: package-windows
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: spiral-preview-windows-x64
+          path: dist
+      - name: Verify checksum and publish exactly the tested main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum --check Spiral-v0.1.0-preview.1-windows-x64.zip.sha256
+          cd ..
+          tag="v0.1.0-preview.1"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing release $tag" >&2
+            exit 1
+          fi
+          gh release create "$tag" \
+            dist/Spiral-v0.1.0-preview.1-windows-x64.zip \
+            dist/Spiral-v0.1.0-preview.1-windows-x64.zip.sha256 \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Spiral v0.1.0-preview.1 — Windows x64 test preview" \
+            --notes-file docs/PREVIEW_RELEASE_v0.1.0-preview.1.md \
+            --prerelease --latest=false
