@@ -129,3 +129,19 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Decide practical fail-closed recovery for unresponsive-but-connected
       members (host removal, timeout expulsion, or admin intervention) without
       treating a missing ACK as approval. Keep #11 OPEN pending these items.
+
+## Issue #11 phase 6: suspend/wake and explicit authority recovery
+
+- [x] Add native Qt monotonic-vs-wall elapsed-time continuity guard and
+      simulate sleep, clock rollback and calibrated recovery in C++ unit tests.
+- [x] Pause immediately and revoke Ready on detected discontinuity before
+      handling old playback timers or delayed time-probe replies.
+- [x] Add strict, authenticated `snapshot` request/response with a fresh
+      operation identifier, read-only unicast semantics and bounded retries.
+- [x] Require a matching recovery snapshot before automatic Ready or playback
+      may resume; add Go real-WebSocket and production-QML fault-injection tests.
+- [ ] Confirm behavior on Windows, Linux and macOS with real OS suspend/resume,
+      media buffering, abrupt partitions and audio hardware.
+- [ ] Collect synchronized dual-device microphone/loopback measurements for
+      play, pause, seek and track changes, with P50/P95/max and acceptance
+      thresholds established prior to testing. Keep Issue #11 OPEN.
