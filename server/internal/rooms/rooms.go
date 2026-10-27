@@ -70,16 +70,18 @@ type membership struct {
 }
 
 type room struct {
-	id        string
-	invite    string
-	source    string
-	createdAt time.Time
-	claimed   bool
-	revision  uint64
-	epoch     string
-	nextEvent uint64
-	playback  Playback
-	members   map[string]membership // Key is an unpredictable session token.
+	id             string
+	invite         string
+	source         string
+	createdAt      time.Time
+	claimed        bool
+	revision       uint64
+	epoch          string
+	nextEvent      uint64
+	playback       Playback
+	operations     map[string]controlReceipt
+	operationOrder []string
+	members        map[string]membership // Key is an unpredictable session token.
 }
 
 type creationRecord struct {

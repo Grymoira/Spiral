@@ -13,12 +13,12 @@ func TestStrictEnvelopeRequiredFieldsAndNulls(t *testing.T) {
 	}{
 		{"auth", `{"type":"auth","roomId":"room","sessionToken":"token"}`},
 		{"clock_probe", `{"type":"clock_probe","probeId":"probe","c0":0}`},
-		{"track", `{"type":"track","sha256":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","durationMs":1000}`},
+		{"track", `{"type":"track","sha256":"` + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" + `","durationMs":1000,"operationId":"unit-track-1","expectedRevision":1}`},
 		{"ready_false", `{"type":"ready","trackId":"test","trackGeneration":1,"ready":false}`},
 		{"ready_true", `{"type":"ready","trackId":"test","trackGeneration":1,"ready":true}`},
-		{"schedule_seek_zero", `{"type":"schedule","action":"seek","mediaMs":0}`},
-		{"schedule_pause_zero", `{"type":"schedule","action":"pause","mediaMs":0}`},
-		{"schedule_play_zero", `{"type":"schedule","action":"play","mediaMs":0}`},
+		{"schedule_seek_zero", `{"type":"schedule","action":"seek","mediaMs":0,"operationId":"unit-schedule-1","expectedRevision":1}`},
+		{"schedule_pause_zero", `{"type":"schedule","action":"pause","mediaMs":0,"operationId":"unit-pause-1","expectedRevision":1}`},
+		{"schedule_play_zero", `{"type":"schedule","action":"play","mediaMs":0,"operationId":"unit-play-1","expectedRevision":1}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestStrictEnvelopeRejectsWrongTypesAndExtraneousFields(t *testing.T) {
 		`{"type":"schedule","action":"seek","mediaMs":0,"unknown":1}`,
 		`{"type":"schedule","action":"seek","mediaMs":0,"mediaMs":1}`,
 		`{"type":"schedule","action":"seek","mediaMs":0,"ACTION":"seek"}`,
-		`{"type":"schedule","action":"seek","mediaMs":0} true`,
+		`{"type":"schedule","action":"seek","mediaMs":0,"operationId":"unit-schedule-1","expectedRevision":1} true`,
 		`{"type":"unknown"}`,
 	}
 	for _, data := range invalid {

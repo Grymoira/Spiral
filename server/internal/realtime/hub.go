@@ -16,18 +16,21 @@ import (
 )
 
 type envelope struct {
-	Type            string `json:"type"`
-	RoomID          string `json:"roomId,omitempty"`
-	SessionToken    string `json:"sessionToken,omitempty"`
-	ProbeID         string `json:"probeId,omitempty"`
-	C0              int64  `json:"c0,omitempty"`
-	SHA256          string `json:"sha256,omitempty"`
-	DurationMs      int64  `json:"durationMs,omitempty"`
-	TrackID         string `json:"trackId,omitempty"`
-	TrackGeneration uint64 `json:"trackGeneration,omitempty"`
-	Ready           bool   `json:"ready,omitempty"`
-	Action          string `json:"action,omitempty"`
-	MediaMs         int64  `json:"mediaMs,omitempty"`
+	Type             string `json:"type"`
+	RoomID           string `json:"roomId,omitempty"`
+	SessionToken     string `json:"sessionToken,omitempty"`
+	ProbeID          string `json:"probeId,omitempty"`
+	C0               int64  `json:"c0,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
+	DurationMs       int64  `json:"durationMs,omitempty"`
+	TrackID          string `json:"trackId,omitempty"`
+	TrackGeneration  uint64 `json:"trackGeneration,omitempty"`
+	Ready            bool   `json:"ready,omitempty"`
+	Action           string `json:"action,omitempty"`
+	MediaMs          int64  `json:"mediaMs,omitempty"`
+	OperationID      string `json:"operationId,omitempty"`
+	ExpectedRevision uint64 `json:"expectedRevision,omitempty"`
+	Reload           bool   `json:"reload,omitempty"`
 }
 
 type peer struct {
@@ -171,7 +174,7 @@ func strictEnvelope(data []byte) (envelope, error) {
 		seen[key] = true
 		// Fields must use protocol-exact lowerCamelCase names.
 		switch key {
-		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs":
+		case "type", "roomId", "sessionToken", "probeId", "c0", "sha256", "durationMs", "trackId", "trackGeneration", "ready", "action", "mediaMs", "operationId", "expectedRevision", "reload":
 		default:
 			return envelope{}, errors.New("unknown field")
 		}
@@ -197,22 +200,29 @@ func strictEnvelope(data []byte) (envelope, error) {
 	allowed := map[string][]string{
 		"auth":        {"type", "roomId", "sessionToken"},
 		"clock_probe": {"type", "probeId", "c0"},
-		"track":       {"type", "sha256", "durationMs"},
+		"track":       {"type", "sha256", "durationMs", "operationId", "expectedRevision"},
 		"ready":       {"type", "trackId", "trackGeneration", "ready"},
-		"schedule":    {"type", "action", "mediaMs"},
+		"schedule":    {"type", "action", "mediaMs", "operationId", "expectedRevision"},
 		"snapshot":    {"type"},
 	}
 	keys, ok := allowed[m.Type]
 	if !ok {
 		return envelope{}, errors.New("unknown action")
 	}
+	// Reload is an optional explicit track intent (defaults to false).
+	if m.Type == "track" {
+		keys = append(keys, "reload")
+	}
 	accepted := map[string]bool{}
 	for _, key := range keys {
 		accepted[key] = true
-		// All fields in a command schema are required. Go's JSON decoder
+		// All required fields in a command schema are required. Go's JSON decoder
 		// otherwise maps absent or null scalar values to false/zero, which
 		// could silently revoke readiness or seek to the start of a track.
 		raw, present := fields[key]
+		if key == "reload" && !present {
+			continue // Optional explicit reset; absent means normal no-op behavior.
+		}
 		if !present || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return envelope{}, errors.New("missing or null required field")
 		}
@@ -220,6 +230,17 @@ func strictEnvelope(data []byte) (envelope, error) {
 	for k := range fields {
 		if !accepted[k] {
 			return envelope{}, errors.New("unexpected field for action")
+		}
+	}
+	if m.Type == "track" || m.Type == "schedule" {
+		if len(m.OperationID) < 8 || len(m.OperationID) > 64 {
+			return envelope{}, errors.New("invalid operation identifier")
+		}
+		for _, b := range []byte(m.OperationID) {
+			if !(b >= 'a' && b <= 'z' || b >= 'A' && b <= 'Z' ||
+				b >= '0' && b <= '9' || b == '-' || b == '_') {
+				return envelope{}, errors.New("invalid operation identifier alphabet")
+			}
 		}
 	}
 	return m, nil
@@ -339,32 +360,35 @@ var errSuperseded = errors.New("session superseded")
 // applyCommand holds the same lock from the current-peer check through the
 // authoritative Store mutation. A replacement cannot slip between them.
 // Lock ordering: Hub.mu -> Store.mu. Never broadcast while holding Hub.mu.
-func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, error) {
+// applyCommand fences superseded connections while applying commands under
+// Hub.mu; Store commands atomically compare revision and deduplicate IDs.
+func (h *Hub) applyCommand(p *peer, cmd envelope) (rooms.Snapshot, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.clients[p.roomID][p.memberID] != p {
-		return rooms.Snapshot{}, errSuperseded
+		return rooms.Snapshot{}, false, errSuperseded
 	}
-	// Also recheck REST leave/session expiry, which can revoke WS authority.
 	if _, err := h.Store.Authorize(p.roomID, p.token); err != nil {
-		return rooms.Snapshot{}, err
+		return rooms.Snapshot{}, false, err
 	}
 	switch cmd.Type {
 	case "track":
-		snap, err := h.Store.SetTrack(p.roomID, p.token, cmd.SHA256, cmd.DurationMs)
-		if err == nil {
-			// Do not allow an old track handler to cancel a newer appointment.
+		snap, applied, err := h.Store.ControlTrack(p.roomID, p.token, cmd.SHA256,
+			cmd.DurationMs, cmd.OperationID, cmd.ExpectedRevision, cmd.Reload)
+		if err == nil && applied {
 			h.cancelTimer(p.roomID)
 		}
-		return snap, err
+		return snap, applied, err
 	case "ready":
-		return h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
+		snap, err := h.Store.SetReady(p.roomID, p.token, cmd.TrackID, cmd.TrackGeneration, cmd.Ready)
+		return snap, err == nil, err
 	case "schedule":
-		return h.Store.Schedule(p.roomID, p.token, cmd.Action, cmd.MediaMs)
+		return h.Store.ControlSchedule(p.roomID, p.token, cmd.Action, cmd.MediaMs,
+			cmd.OperationID, cmd.ExpectedRevision)
 	case "clock_probe":
-		return rooms.Snapshot{}, nil // No mutation; reply after releasing Hub.mu.
+		return rooms.Snapshot{}, false, nil
 	default:
-		return rooms.Snapshot{}, errors.New("command not supported")
+		return rooms.Snapshot{}, false, errors.New("command not supported")
 	}
 }
 
@@ -452,7 +476,7 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			p.send(map[string]string{"type": "error", "code": "invalid_message"})
 			continue
 		}
-		snap, err := h.applyCommand(p, cmd)
+		snap, applied, err := h.applyCommand(p, cmd)
 		if errors.Is(err, errSuperseded) {
 			diagnostic.Warn("websocket.session_superseded")
 			return
@@ -471,7 +495,7 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 			s1 := h.Store.ServerMs()
 			p.send(map[string]any{"type": "clock_reply", "probeId": cmd.ProbeID, "c0": cmd.C0, "s1": s1, "s2": h.Store.ServerMs(), "clockEpoch": h.Store.ClockEpoch()})
 		case "track":
-			if err == nil {
+			if err == nil && applied {
 				diagnostic.Info("playback.track_changed", "duration_ms", cmd.DurationMs)
 				h.Broadcast(p.roomID)
 			}
@@ -481,7 +505,7 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 				h.Broadcast(p.roomID)
 			}
 		case "schedule":
-			if err == nil {
+			if err == nil && applied {
 				diagnostic.Info("playback.scheduled", "action", cmd.Action, "event_id", snap.Playback.Pending.ID, "track_generation", snap.Playback.TrackGeneration)
 				h.Broadcast(p.roomID)
 				h.scheduleTimer(p.roomID, snap)
@@ -489,7 +513,16 @@ func (h *Hub) handle(c *socket, diagnostic *slog.Logger) {
 		}
 		if err != nil {
 			diagnostic.Warn("websocket.operation_rejected", "reason", errorCode(err), "action", cmd.Type)
-			p.send(map[string]string{"type": "error", "code": errorCode(err)})
+			if cmd.OperationID != "" {
+				p.send(map[string]any{"type": "error", "code": errorCode(err), "operationId": cmd.OperationID})
+			} else {
+				p.send(map[string]string{"type": "error", "code": errorCode(err)})
+			}
+		} else if cmd.Type == "track" || cmd.Type == "schedule" {
+			// Acknowledge accepted no-ops and duplicate deliveries too.
+			// A replay may be older than the latest room revision.
+			p.send(map[string]any{"type": "command_ack", "operationId": cmd.OperationID,
+				"stateRevision": snap.StateRevision, "applied": applied})
 		}
 	}
 }
@@ -504,6 +537,10 @@ func errorCode(err error) string {
 		return "no_track"
 	case errors.Is(err, rooms.ErrInvalidState):
 		return "invalid_state"
+	case errors.Is(err, rooms.ErrRevisionConflict):
+		return "revision_conflict"
+	case errors.Is(err, rooms.ErrOperationConflict):
+		return "operation_conflict"
 	case errors.Is(err, rooms.ErrUnauthorized):
 		return "unauthorized"
 	default:

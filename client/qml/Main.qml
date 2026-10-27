@@ -39,11 +39,22 @@ ApplicationWindow {
     property string scheduledKey: ""
     property int lastCorrectionMs: -100000
     property bool userJoining: false
+    property var pendingControl: null
 
     function endpoint(path) { return serverUrl.replace(/\/+$/, "") + path }
     function send(message) {
         if (socket.status === WebSocket.Open && authenticated)
             socket.sendTextMessage(JSON.stringify(message))
+    }
+    function submitControl(command) {
+        if (pendingControl || !roomState || !roomState.stateRevision) {
+            logText = "Waiting for room state or previous command acknowledgement"
+            return
+        }
+        command.operationId = syncTools.newOperationId()
+        command.expectedRevision = Number(roomState.stateRevision)
+        pendingControl = command
+        send(command)
     }
     function request(method, path, payload, done) {
         var base = syncTools.validatedServerBase(serverUrl)
@@ -78,6 +89,7 @@ ApplicationWindow {
         scheduledKey = ""
         readySentKey = ""
         roomState = ({})
+        pendingControl = null
         socket.url = wsUrl
         socket.active = true
         logText = "Connecting real-time room…"
@@ -116,6 +128,7 @@ ApplicationWindow {
         roomId = ""
         memberToken = ""
         roomState = ({})
+        pendingControl = null
         playbackTimer.stop()
         // Explicit leave: server may destroy the room if we were the host.
         var base = syncTools.validatedServerBase(serverUrl)
@@ -216,15 +229,25 @@ ApplicationWindow {
             logText = "Host must select and load a test audio file first"
             return
         }
-        send({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration)})
+        if (roomState.playback && roomState.playback.trackId === selectedHash &&
+                Number(roomState.playback.durationMs) === Math.round(player.duration)) {
+            logText = "This recording is already shared; use an explicit reload to reset readiness"
+            return
+        }
+        submitControl({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration)})
         syncTools.logEvent("client.track_shared")
+    }
+    function reloadTrack() {
+        if (memberRole !== "host" || !authenticated || !selectedHash || player.duration <= 0) return
+        submitControl({type:"track", sha256:selectedHash, durationMs:Math.round(player.duration),
+                       reload:true})
     }
     function roomCommand(action, ms) {
         if (memberRole !== "host" || !authenticated || !clockReady) {
             logText = "Host connection and a calibrated clock are required"
             return
         }
-        send({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
+        submitControl({type:"schedule", action:action, mediaMs:Math.round(ms || 0)})
         syncTools.logEvent("client.scheduled_command")
     }
     function predictedPosition(p) {
@@ -342,6 +365,9 @@ ApplicationWindow {
                 window.clockSamples = 0
                 window.pendingProbes = ({})
                 window.probeClock()
+                // Resend the same operation ID after reconnect; never create a
+                // second event if the first command was already accepted.
+                if (window.pendingControl) window.send(window.pendingControl)
                 window.logText = "Room connected. Calibrating server clock…"
             } else if (msg.type === "clock_reply") window.receiveClock(msg)
             else if (msg.type === "snapshot") {
@@ -368,7 +394,17 @@ ApplicationWindow {
                     window.maybeReady()
                     window.reconcile()
                 }
-            } else if (msg.type === "error") { syncTools.logEventLevel("client.room_error", "WARN"); window.logText = "Room error: " + msg.code }
+            } else if (msg.type === "command_ack") {
+                if (window.pendingControl && msg.operationId === window.pendingControl.operationId) {
+                    window.pendingControl = null
+                }
+            } else if (msg.type === "error") {
+                if (window.pendingControl && msg.operationId === window.pendingControl.operationId) {
+                    window.pendingControl = null
+                }
+                syncTools.logEventLevel("client.room_error", "WARN")
+                window.logText = "Room error: " + msg.code
+            }
         }
     }
     Timer { id: playbackTimer; repeat: false; onTriggered: window.executePending() }
@@ -447,18 +483,19 @@ ApplicationWindow {
                     Label { Layout.fillWidth:true; wrapMode:Text.WrapAnywhere; color:window.secondary; text:player.source.toString() || "No file selected" }
                     RowLayout {
                         Button { text:"Select audio file"; onClicked:picker.open() }
-                        Button { text:"Host: share track"; enabled:window.authenticated && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.shareTrack() }
+                        Button { text:"Host: share track"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.shareTrack() }
+                        Button { text:"Host: reload"; enabled:window.authenticated && !window.pendingControl && window.memberRole==="host" && window.selectedHash!=="" && player.duration>0; onClicked:window.reloadTrack() }
                     }
                     Label { Layout.fillWidth:true; color:window.secondary; wrapMode:Text.WrapAnywhere; text:"Room track SHA-256: " + (window.roomState.playback && window.roomState.playback.trackId ? window.roomState.playback.trackId : "not selected") }
                     Label { color:window.sameRecording() ? "#83d9ae" : window.secondary; text: window.sameRecording() ? "Local file matches room recording" : "Local file not yet matched" }
-                    Slider { id:progress; Layout.fillWidth:true; from:0; to:Math.max(1,player.duration); value:player.position; enabled:player.seekable
+                    Slider { id:progress; Layout.fillWidth:true; from:0; to:Math.max(1,player.duration); value:player.position; enabled:player.seekable && !window.pendingControl
                         onMoved: { if (window.roomId !== "") window.roomCommand("seek",value); else player.position=value }
                     }
                     RowLayout {
                         Label { color:window.secondary; text:Math.floor(player.position/1000) + "s / " + Math.floor(player.duration/1000) + "s" }
                         Item { Layout.fillWidth:true }
-                        Button { text:"Play together"; enabled:window.memberRole==="host" && window.clockReady && window.sameRecording(); onClicked:window.roomCommand("play",0) }
-                        Button { text:"Pause together"; enabled:window.memberRole==="host" && window.clockReady; onClicked:window.roomCommand("pause",0) }
+                        Button { text:"Play together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady && window.sameRecording(); onClicked:window.roomCommand("play",0) }
+                        Button { text:"Pause together"; enabled:!window.pendingControl && window.memberRole==="host" && window.clockReady; onClicked:window.roomCommand("pause",0) }
                         Button { text:"Local play"; enabled:window.roomId==="" && window.selectedHash!==""; onClicked:player.play() }
                     }
                 }

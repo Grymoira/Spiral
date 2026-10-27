@@ -7,15 +7,18 @@ import (
 )
 
 var (
-	ErrNoTrack      = errors.New("no track selected")
-	ErrNotReady     = errors.New("room members are not ready")
-	ErrInvalidState = errors.New("invalid sync state")
+	ErrNoTrack           = errors.New("no track selected")
+	ErrNotReady          = errors.New("room members are not ready")
+	ErrInvalidState      = errors.New("invalid sync state")
+	ErrRevisionConflict  = errors.New("room revision conflict")
+	ErrOperationConflict = errors.New("operation identifier reused with different payload")
 )
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 const maxTrackDurationMs int64 = 24 * 60 * 60 * 1000
 const scheduleLeadMs int64 = 2500
+const maxRememberedOperations = 64
 
 type Playback struct {
 	TrackID         string          `json:"trackId"`
@@ -66,6 +69,113 @@ func (s *Store) Authorize(roomID, token string) (Member, error) {
 	return m.member, nil
 }
 
+// Accepted operation receipts are retained per room across WebSocket reconnects.
+// The fixed retention cap bounds memory. Expired receipts cannot bypass revision
+// checks: a retry with an evicted key and stale expectedRevision is rejected.
+type controlReceipt struct {
+	memberID         string
+	kind             string
+	expectedRevision uint64
+	hash             string
+	duration         int64
+	reload           bool
+	action           string
+	mediaMs          int64
+}
+
+func (r *room) findOperation(id string, candidate controlReceipt) (bool, error) {
+	old, present := r.operations[id]
+	if !present {
+		return false, nil
+	}
+	if old != candidate {
+		return false, ErrOperationConflict
+	}
+	return true, nil
+}
+
+func (r *room) rememberOperation(id string, receipt controlReceipt) {
+	if r.operations == nil {
+		r.operations = make(map[string]controlReceipt)
+	}
+	if len(r.operationOrder) == maxRememberedOperations {
+		delete(r.operations, r.operationOrder[0])
+		r.operationOrder = r.operationOrder[1:]
+	}
+	r.operationOrder = append(r.operationOrder, id)
+	r.operations[id] = receipt
+}
+
+// ControlTrack applies a host track command with atomic deduplication and
+// optimistic revision checking. applied=false means neither state nor timer
+// should be reset; accepted duplicate keys return the current room snapshot.
+func (s *Store) ControlTrack(roomID, token, hash string, durationMs int64,
+	operationID string, expectedRevision uint64, reload bool) (Snapshot, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, member, err := s.authorized(roomID, token)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if member.member.Role != "host" {
+		return Snapshot{}, false, ErrForbidden
+	}
+	if operationID == "" || !sha256Pattern.MatchString(hash) ||
+		durationMs <= 0 || durationMs > maxTrackDurationMs {
+		return Snapshot{}, false, ErrInvalidState
+	}
+	receipt := controlReceipt{memberID: member.member.ID, kind: "track",
+		expectedRevision: expectedRevision, hash: hash, duration: durationMs, reload: reload}
+	replayed, err := r.findOperation(operationID, receipt)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if replayed {
+		return s.snapshot(r), false, nil
+	}
+	if expectedRevision != r.revision {
+		return Snapshot{}, false, ErrRevisionConflict
+	}
+	applied := s.setTrackLocked(r, hash, durationMs, reload)
+	r.rememberOperation(operationID, receipt)
+	return s.snapshot(r), applied, nil
+}
+
+// ControlSchedule guarantees a retransmitted schedule command never allocates
+// another event ID or shifts a deadline, even if the first event committed.
+func (s *Store) ControlSchedule(roomID, token, action string, mediaMs int64,
+	operationID string, expectedRevision uint64) (Snapshot, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, member, err := s.authorized(roomID, token)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if member.member.Role != "host" {
+		return Snapshot{}, false, ErrForbidden
+	}
+	if operationID == "" {
+		return Snapshot{}, false, ErrInvalidState
+	}
+	receipt := controlReceipt{memberID: member.member.ID, kind: "schedule",
+		expectedRevision: expectedRevision, action: action, mediaMs: mediaMs}
+	replayed, err := r.findOperation(operationID, receipt)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	if replayed {
+		return s.snapshot(r), false, nil
+	}
+	if expectedRevision != r.revision {
+		return Snapshot{}, false, ErrRevisionConflict
+	}
+	if err := s.scheduleLocked(r, action, mediaMs); err != nil {
+		return Snapshot{}, false, err
+	}
+	r.rememberOperation(operationID, receipt)
+	return s.snapshot(r), true, nil
+}
+
 func (s *Store) SetTrack(roomID, token, hash string, durationMs int64) (Snapshot, error) {
 	if !sha256Pattern.MatchString(hash) || durationMs <= 0 || durationMs > maxTrackDurationMs {
 		return Snapshot{}, ErrInvalidState
@@ -79,6 +189,16 @@ func (s *Store) SetTrack(roomID, token, hash string, durationMs int64) (Snapshot
 	if m.member.Role != "host" {
 		return Snapshot{}, ErrForbidden
 	}
+	s.setTrackLocked(r, hash, durationMs, false)
+	return s.snapshot(r), nil
+}
+
+// setTrackLocked never resets readiness for an identical non-reload track.
+// Caller holds Store.mu; reload explicitly forces a new generation.
+func (s *Store) setTrackLocked(r *room, hash string, durationMs int64, reload bool) bool {
+	if !reload && r.playback.TrackID == hash && r.playback.DurationMs == durationMs {
+		return false
+	}
 	r.playback.TrackID = hash
 	r.playback.DurationMs = durationMs
 	r.playback.TrackGeneration++
@@ -91,7 +211,7 @@ func (s *Store) SetTrack(roomID, token, hash string, durationMs int64) (Snapshot
 		r.members[k] = member
 	}
 	r.revision++
-	return s.snapshot(r), nil
+	return true
 }
 
 // cancelUnreadyPlaybackLocked withdraws a queued playing-state transition
@@ -153,14 +273,23 @@ func (s *Store) Schedule(roomID, token, action string, mediaMs int64) (Snapshot,
 	if m.member.Role != "host" {
 		return Snapshot{}, ErrForbidden
 	}
+	if err := s.scheduleLocked(r, action, mediaMs); err != nil {
+		return Snapshot{}, err
+	}
+	return s.snapshot(r), nil
+}
+
+// scheduleLocked is shared with the protocol path guarded by expectedRevision.
+// Caller holds Store.mu; never allocate an event for a rejected command.
+func (s *Store) scheduleLocked(r *room, action string, mediaMs int64) error {
 	if r.playback.TrackID == "" {
-		return Snapshot{}, ErrNoTrack
+		return ErrNoTrack
 	}
 	if action != "play" && action != "pause" && action != "seek" {
-		return Snapshot{}, ErrInvalidState
+		return ErrInvalidState
 	}
 	if mediaMs < 0 || mediaMs > r.playback.DurationMs {
-		return Snapshot{}, ErrInvalidState
+		return ErrInvalidState
 	}
 	next := "paused"
 	if action == "play" || (action == "seek" && r.playback.PlayState == "playing") {
@@ -169,7 +298,7 @@ func (s *Store) Schedule(roomID, token, action string, mediaMs int64) (Snapshot,
 	if next == "playing" {
 		for _, member := range r.members {
 			if !member.member.Ready {
-				return Snapshot{}, ErrNotReady
+				return ErrNotReady
 			}
 		}
 	}
@@ -183,7 +312,7 @@ func (s *Store) Schedule(roomID, token, action string, mediaMs int64) (Snapshot,
 		ExecuteServerMs: at, MediaMs: mediaMs, PlayState: next,
 	}
 	r.revision++
-	return s.snapshot(r), nil
+	return nil
 }
 
 // CommitEvent is idempotent and refuses stale/replaced events.

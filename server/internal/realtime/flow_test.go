@@ -23,7 +23,9 @@ import (
 
 type testConn struct {
 	net.Conn
-	rd *bufio.Reader
+	rd              *bufio.Reader
+	revision        uint64
+	commandSequence uint64
 }
 
 func connect(t *testing.T, addr string) *testConn {
@@ -47,10 +49,21 @@ func negotiate(t *testing.T, conn net.Conn, addr string) *testConn {
 		t.Fatalf("websocket status %d", response.StatusCode)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return &testConn{conn, rd}
+	return &testConn{Conn: conn, rd: rd}
 }
 func (c *testConn) send(t *testing.T, msg any) {
 	t.Helper()
+	if command, ok := msg.(map[string]any); ok {
+		if command["type"] == "track" || command["type"] == "schedule" {
+			c.commandSequence++
+			if _, present := command["operationId"]; !present {
+				command["operationId"] = fmt.Sprintf("test-command-%d", c.commandSequence)
+			}
+			if _, present := command["expectedRevision"]; !present {
+				command["expectedRevision"] = c.revision
+			}
+		}
+	}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		t.Fatal(err)
@@ -106,6 +119,13 @@ func (c *testConn) recv(t *testing.T) map[string]any {
 		var m map[string]any
 		if err := json.Unmarshal(payload, &m); err != nil {
 			t.Fatal(err)
+		}
+		if m["type"] == "snapshot" {
+			if s, ok := m["state"].(map[string]any); ok {
+				if revision, ok := s["stateRevision"].(float64); ok {
+					c.revision = uint64(revision)
+				}
+			}
 		}
 		return m
 	}
@@ -175,6 +195,9 @@ func TestTwoClientRealWebSocketTimeline(t *testing.T) {
 	h.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 4 })
 	g.send(t, map[string]any{"type": "ready", "trackId": strings.Repeat("a", 64), "trackGeneration": 1, "ready": true})
 	g.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 5 })
+	// Optimistic host commands must use the latest authoritative revision.
+	// The guest's Ready changed the room after the host's previous snapshot.
+	h.until(t, "snapshot", func(m map[string]any) bool { return state(m)["stateRevision"].(float64) >= 5 })
 	h.send(t, map[string]any{"type": "schedule", "action": "play", "mediaMs": 0})
 	pendingH := h.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
 	pendingG := g.until(t, "snapshot", func(m map[string]any) bool { return playback(m)["pending"] != nil })
