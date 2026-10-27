@@ -49,7 +49,7 @@ func negotiate(t *testing.T, conn net.Conn, addr string) *testConn {
 		t.Fatalf("websocket status %d", response.StatusCode)
 	}
 	t.Cleanup(func() { conn.Close() })
-	return &testConn{conn, rd}
+	return &testConn{Conn: conn, rd: rd}
 }
 func (c *testConn) send(t *testing.T, msg any) {
 	t.Helper()
