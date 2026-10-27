@@ -20,7 +20,7 @@ function extract(name) {
     throw new Error("unclosed function: " + name);
 }
 const funcs = [
-    "armPending", "pendingUsable", "deferPending", "acknowledgeArming", "executePending",
+    "armPending", "pendingUsable", "authorityFresh", "safeguardAuthority", "deferPending", "acknowledgeArming", "executePending",
     "reconcile", "sameRecording", "mediaLoaded", "ownReady", "predictedPosition"
 ].map(extract).join("\n");
 
@@ -38,7 +38,7 @@ function scenario() {
     };
     const hash = "a".repeat(64);
     const context = {
-        authenticated: true, clockReady: true, clockOffsetMs: 0,
+        authenticated: true, clockReady: true, clockOffsetMs: 0, lastAuthorityReplyMs: 0, authorityStaleAfterMs: 1000000,
         roomState: {playback: {
             trackId: hash, trackGeneration: 1, durationMs: 10000,
             playState: "paused", anchorMediaMs: 0, anchorServerMs: 0,

@@ -257,6 +257,9 @@ func (s *Store) purgeExpired(r *room) bool {
 				s.notifyExpiryLocked()
 				return false
 			}
+			// Treat a departed live member as a synchronization loss
+			// before removal makes the remaining Ready set look complete.
+			s.pausePlaybackLocked(r)
 			delete(r.members, token)
 			r.revision++
 			s.notifyExpiryLocked()
@@ -292,8 +295,10 @@ func (s *Store) Join(roomID, invite string) (Credentials, error) {
 	expires := s.now().Add(sessionLifetime)
 	r.members[token] = membership{member: Member{ID: memberID, Role: "member"}, expiresAt: expires}
 	r.claimed = true
-	// A newly joined member is not ready: cancel an in-flight play event.
+	// A newly joined member is not ready: invalidate future play and
+	// pause any currently audible authoritative timeline.
 	s.cancelUnreadyPlaybackLocked(r)
+	s.pausePlaybackLocked(r)
 	r.revision++
 	return Credentials{RoomID: roomID, MemberID: memberID, SessionToken: token, SessionExpiresAt: expires}, nil
 }
@@ -356,6 +361,7 @@ func (s *Store) Leave(roomID, token string) error {
 		delete(s.rooms, roomID)
 		return nil
 	}
+	s.pausePlaybackLocked(r)
 	delete(r.members, token)
 	r.revision++
 	return nil

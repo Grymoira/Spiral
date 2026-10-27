@@ -132,3 +132,20 @@ ACK means **application prepared to schedule**, not physical audio-start
 confirmation. Delivery failure after COMMIT, network partitions and audio
 output latency are still outside proven correctness. Issue #11 remains open
 pending physical two-device capture and P50/P95/max measurements.
+
+### Playing-state fail-closed suspension (Issue #11, phase 2)
+
+The authoritative room freezes its media anchor and enters `paused` when
+an active member revokes Ready, loses its WebSocket, leaves/expires or a new
+unready member joins an already-playing room. Existing surviving sessions
+are informed by room snapshots. An unreachable device cannot be guaranteed
+to receive an asynchronous cancellation.
+
+The Qt desktop client uses a 2,500ms recent-authority requirement during
+playback or scheduled play and a 700ms clock-probe cadence while playing or
+pending. A validated clock probe reply or an accepted room snapshot refreshes
+the contact timestamp. If no such event arrives for 2.5 seconds, the client
+pauses playback and timers, attempts to withdraw Ready and requires fresh
+clock calibration. Normal idle probing remains 15s. This is *bounded local
+best-effort detection*, not consensus or physical acoustic synchronization.
+OS suspension, packet loss and Qt scheduling delay can exceed this window.

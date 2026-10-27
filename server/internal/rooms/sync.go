@@ -250,8 +250,27 @@ func (s *Store) SetReady(roomID, token, trackID string, generation uint64, ready
 	m.member.Ready = ready
 	r.members[token] = m
 	s.cancelUnreadyPlaybackLocked(r)
+	if !ready {
+		// A peer cannot continue coordinated playback after one member
+		// withdraws its readiness (buffering, disconnect, bad clock).
+		s.pausePlaybackLocked(r)
+	}
 	r.revision++
 	return s.snapshot(r), nil
+}
+
+// pausePlaybackLocked freezes the authoritative audio position at the
+// current monotonic server time after a participant becomes unavailable.
+// Caller holds Store.mu; the outer membership operation increments revision.
+func (s *Store) pausePlaybackLocked(r *room) bool {
+	if r.playback.PlayState != "playing" {
+		return false
+	}
+	now := s.ServerMs()
+	r.playback.AnchorMediaMs = mediaAt(r.playback, now)
+	r.playback.AnchorServerMs = now
+	r.playback.PlayState = "paused"
+	return true
 }
 
 func mediaAt(p Playback, atMs int64) int64 {

@@ -78,3 +78,13 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
 - [ ] Verify real Qt Multimedia state transitions, explicit CANCEL ACK,
       network partitions after COMMIT, OS suspend/reconnect and two-device
       recorded acoustic onset differences. Issue #11 remains OPEN.
+
+## Issue #11 phase 2: fail-closed active playback
+
+- [x] Freeze authoritative playhead on Ready loss, disconnect, member
+      join/leave and expired guest, preserving monotonic media position.
+- [x] Require recent verified coordinator response during queued/audible
+      playback, with a 2.5s watchdog and 700ms targeted clock probes.
+- [ ] Implement verifiable cancellation receipt/partition semantics and
+      perform real Qt playback, suspend/reconnect, fault injection and
+      two-device acoustic P50/P95/max acceptance. Issue #11 remains OPEN.

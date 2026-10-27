@@ -172,3 +172,71 @@ func TestPlayingArmCommitUsesFreshMediaAnchor(t *testing.T) {
 		t.Fatalf("delayed COMMIT must reanchor media: got %d, want %d", event.MediaMs, want)
 	}
 }
+
+func TestReadyLossPausesAlreadyPlayingAuthoritativeTimeline(t *testing.T) {
+	s, host, guest, hash := preparedRoom(t)
+	s.mu.Lock()
+	r := s.rooms[host.RoomID]
+	r.playback.PlayState = "playing"
+	r.playback.AnchorMediaMs = 1000
+	r.playback.AnchorServerMs = s.ServerMs() - 800
+	r.revision++
+	s.mu.Unlock()
+	before, err := s.Snapshot(host.RoomID, host.SessionToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped, err := s.SetReady(host.RoomID, guest.SessionToken, hash, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stopped.Playback.PlayState != "paused" || stopped.StateRevision != before.StateRevision+1 ||
+		stopped.Playback.AnchorMediaMs < 1800 || stopped.Playback.AnchorMediaMs > 2200 {
+		t.Fatalf("member readiness loss failed to freeze timeline: %+v", stopped.Playback)
+	}
+	if stopped.Playback.AnchorServerMs < before.Playback.AnchorServerMs {
+		t.Fatalf("monotonic anchor went backwards: %+v", stopped.Playback)
+	}
+	noOp, err := s.SetReady(host.RoomID, guest.SessionToken, hash, 1, false)
+	if err != nil || noOp.StateRevision != stopped.StateRevision {
+		t.Fatalf("repeated Ready=false bumped revision: %+v %v", noOp, err)
+	}
+}
+
+func TestLateJoinAndDepartureFreezeAlreadyPlayingRoom(t *testing.T) {
+	t.Run("join", func(t *testing.T) {
+		s := NewStore()
+		host, _ := s.Create()
+		hash := strings.Repeat("d", 64)
+		_, _ = s.SetTrack(host.RoomID, host.SessionToken, hash, 5000)
+		_, _ = s.SetReady(host.RoomID, host.SessionToken, hash, 1, true)
+		s.mu.Lock()
+		s.rooms[host.RoomID].playback.PlayState = "playing"
+		s.rooms[host.RoomID].playback.AnchorMediaMs = 700
+		s.rooms[host.RoomID].playback.AnchorServerMs = s.ServerMs() - 500
+		s.mu.Unlock()
+		_, err := s.Join(host.RoomID, host.InviteCode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, _ := s.Snapshot(host.RoomID, host.SessionToken)
+		if after.Playback.PlayState != "paused" || after.Playback.AnchorMediaMs < 1200 {
+			t.Fatalf("late join did not freeze active playback: %+v", after.Playback)
+		}
+	})
+	t.Run("leave", func(t *testing.T) {
+		s, host, guest, _ := preparedRoom(t)
+		s.mu.Lock()
+		s.rooms[host.RoomID].playback.PlayState = "playing"
+		s.rooms[host.RoomID].playback.AnchorMediaMs = 500
+		s.rooms[host.RoomID].playback.AnchorServerMs = s.ServerMs() - 600
+		s.mu.Unlock()
+		if err := s.Leave(host.RoomID, guest.SessionToken); err != nil {
+			t.Fatal(err)
+		}
+		after, _ := s.Snapshot(host.RoomID, host.SessionToken)
+		if after.Playback.PlayState != "paused" || after.Playback.AnchorMediaMs < 1100 {
+			t.Fatalf("guest departure did not freeze room: %+v", after.Playback)
+		}
+	})
+}

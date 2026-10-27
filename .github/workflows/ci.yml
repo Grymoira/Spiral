@@ -62,6 +62,8 @@ jobs:
         run: node client/tests/pending_recovery.test.cjs
       - name: QML event arming and commitment regressions
         run: node client/tests/arming_protocol.test.cjs
+      - name: QML authoritative-contact partition safety regressions
+        run: node client/tests/authority_partition.test.cjs
       - name: Transport URL and redirect security regressions
         run: |
           ctest --test-dir build/dev --output-on-failure -R spiral-transport-policy
