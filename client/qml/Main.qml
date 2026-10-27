@@ -149,6 +149,9 @@ ApplicationWindow {
             logText = "Clock calibrated (best RTT " + Math.round(bestRttMs) + " ms)"
             maybeReady()
             reconcile()
+        } else if (clockReady) {
+            // An updated clock model changes the local deadline of an existing event.
+            reconcile()
         }
     }
     function sameRecording() {
@@ -219,6 +222,14 @@ ApplicationWindow {
         if (!p || !p.pending || scheduledKey !== String(p.trackGeneration) + ":" + p.pending.id) return
         // A lost Ready or stale snapshot must never start audible playback.
         if (p.pending.playState === "playing" && !ownReady()) return
+        // A timer can fire early after clock-offset corrections or event-loop jitter.
+        var remaining = Number(p.pending.executeServerMs) -
+                        syncTools.monotonicMs() - clockOffsetMs
+        if (remaining > 0) {
+            playbackTimer.interval = Math.max(1, Math.ceil(remaining))
+            playbackTimer.restart()
+            return
+        }
         syncTools.logEvent("client.playback_executed")
         if (p.pending.playState === "playing") {
             player.position = Math.min(Number(p.durationMs), Number(p.pending.mediaMs) +
@@ -234,13 +245,13 @@ ApplicationWindow {
         var p = roomState.playback
         if (p.pending) {
             var key = String(p.trackGeneration) + ":" + p.pending.id
-            if (scheduledKey !== key) {
-                scheduledKey = key
-                playbackTimer.stop()
-                playbackTimer.interval = Math.max(1, Math.floor(Number(p.pending.executeServerMs) -
-                                                       syncTools.monotonicMs() - clockOffsetMs))
-                playbackTimer.start()
-            }
+            // Recompute from the absolute server deadline, including when the
+            // event is unchanged but the clock offset has been recalibrated.
+            var remaining = Number(p.pending.executeServerMs) -
+                            syncTools.monotonicMs() - clockOffsetMs
+            scheduledKey = key
+            playbackTimer.interval = Math.max(1, Math.ceil(remaining))
+            playbackTimer.restart()
             return
         }
         playbackTimer.stop()
