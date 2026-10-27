@@ -247,6 +247,15 @@ func TestTwoClientRealWebSocketTimeline(t *testing.T) {
 	if m := h.until(t, "error", nil); m["code"] != "invalid_message" {
 		t.Fatal("accepted invalid message casing")
 	}
+	// A now-playing guest abruptly losing the socket forces the server's
+	// authoritative timeline to pause for the remaining host.
+	if err := g.Close(); err != nil { t.Fatal(err) }
+	paused := h.until(t, "snapshot", func(m map[string]any) bool {
+		return playback(m)["pending"] == nil && playback(m)["playState"] == "paused"
+	})
+	if playback(paused)["anchorMediaMs"].(float64) < 0 {
+		t.Fatal("disconnection produced invalid frozen media position")
+	}
 }
 
 func TestWebSocketBadAuthorizationAndFrame(t *testing.T) {
