@@ -97,7 +97,10 @@ function scenario() {
     mock.now = 5200;
     fireTimer();
     assert.equal(mock.plays, 1, "play once at the corrected deadline");
+    // Force an accepted clock-model update after the timer has fired.
+    context.bestRttMs = 1000000;
     deliverClock(-100, "after-execution");
+    assert.equal(context.clockOffsetMs, -100);
     assert.equal(timer.running, false, "new sample must not replay a completed event");
 }
 {
