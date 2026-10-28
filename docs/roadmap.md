@@ -205,3 +205,25 @@ The original SyncMusic research described Phase 0–7, but no corresponding sour
       codec/license manifest, signed/notarized packages and packaging matrix.
 - [ ] Complete Issue #11 physical stereo-clock onset, pause/seek and
       network/suspend failure-injection acceptance before a stable release.
+
+## 2026-10-28: P2P connectivity research (proposal only, Issue #70)
+
+- [x] Record verified RFCs, publicly available large-scale DCUtR measurements,
+      source-level C++/Go DataChannel examples and their **conditional evidence**
+      in [P2P connectivity research](research/P2P_CONNECTIVITY_RESEARCH.md).
+- [x] Define a four-stage proof-of-concept plan (single Windows device;
+      independently routed NAT simulation; real distinct-network devices;
+      real cross-country devices) and a privacy-preserving evidence matrix.
+- [ ] Build and run the standalone libdatachannel copy/paste PoC; validate
+      actual encrypted bidirectional traffic and the selected ICE candidate pair.
+- [ ] Run independently verified NAT mapping/filtering simulations and genuine
+      two-network Windows tests before choosing a production transport.
+- [ ] Write a **Proposed ADR**, review security/licensing/process lifecycle,
+      and decide whether host-coordinated P2P is worth introducing alongside
+      the existing authenticated HTTPS/WSS mode.
+- [ ] Complete real cross-country and acoustic acceptance before promising
+      reliable international synchronized playback. Keep #70 and #11 OPEN.
+
+**Boundary:** This entry records research, not functioning P2P networking,
+a production architecture decision, or any executed PoC. Existing transport
+and synchronization protocol remain unchanged.
