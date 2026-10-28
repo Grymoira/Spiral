@@ -528,3 +528,26 @@ and full license audits across all deployed codecs are not claimed; leave
 Issue #12 open. Issue #11 is also open until independently captured acoustic
 P50/P95/max, network fault-injection and real OS suspend tests are accepted.
 Always report actual release/PR CI results instead of assuming success.
+
+## 2026-10-28 — P2P NAT traversal research checkpoint (documentation only)
+
+Added [P2P connectivity research](research/P2P_CONNECTIVITY_RESEARCH.md),
+cross-referenced by [Issue #70](https://github.com/Grymoira/Spiral/issues/70).
+This compares public IPv4/IPv6 direct paths, explicitly mapped ports,
+ICE + STUN with manual/other out-of-band signaling, and optional relay
+fallback. It distinguishes no dedicated coordinator, no relay, and strictly
+no third-party service. Sources include RFCs, peer-reviewed/published DCUtR
+measurement evidence with its **conditional** hole-punching cohort,
+libdatachannel C++ copy/paste and Pion Go examples, and a caveated NAT
+simulation reference. The research documents a staged acceptance matrix,
+failure boundaries, security requirements, and a proposed decision gate.
+
+**Completed**: recorded research and an executable *plan* for a standalone
+connectivity PoC. **Not performed**: third-party library build, ICE PoC,
+NAT simulations, separate-network Windows verification, cross-country
+verification, penetration testing, or real dual-device acoustic recording.
+No production source code, current approved transport, privacy defaults,
+build dependencies, or sync protocol changed. P2P is not implemented;
+keep #70 OPEN. Real acoustic acceptance remains in #11 and is still
+unverified. A new architecture ADR must be explicitly reviewed before
+integration; this research checkpoint does not supersede ADR-0002.
