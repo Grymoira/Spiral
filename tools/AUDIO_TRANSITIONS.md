@@ -32,8 +32,13 @@ Example manifest (times refer to the *capture* beginning):
 Preconditions: the 30 ms before a `start` is quiet; the signal is audible
 immediately before a `stop`; each non-overlapping 300–5000 ms window contains
 exactly the intended event. Provide at least 30 valid annotated events per
-included kind for a real-capture bounded verdict. A detector checks for
-sustained activity/silence and rejects clipped, missing or inconsistent events.
+included kind for a real-capture bounded verdict. A detector checks for sustained activity/silence and rejects clipped,
+missing or inconsistent events. **Starts require threshold-level activity in
+at least 60% of a 20 ms confirmation window**; a short click-like transient
+must not count as the onset of the continuous reference signal. Stops require
+at least 10 ms of sustained silence. If a valid waveform falls below the
+activity threshold, calibrate the input or use a justified threshold setting;
+never silently relax the criterion to improve measured results.
 The reported right-minus-left latency compares acoustic transitions within
 one recording, **not** two OS clocks. A `stop` detection needs at least 10 ms
 of quiet confirmation; its reported timestamp is the *beginning* of that

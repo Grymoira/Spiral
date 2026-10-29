@@ -83,6 +83,36 @@ class TransitionTests(unittest.TestCase):
         self.assertAlmostEqual(result['summary_by_kind']['stop']['p50_absolute_ms'], 17, delta=1)
         self.assertTrue(any('NEVER physical' in w for w in result['warnings']))
 
+    def test_short_click_bursts_do_not_pass_as_continuous_audio(self):
+        # The previous 25%-of-10ms onset gate accepted a 3ms transient in
+        # each channel and could issue a false WITHIN_CONFIGURED_LIMITS verdict.
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            stereo = array('h', [0]) * (RATE * 2)  # 1 second, two channels
+            for channel, offset_ms in ((0, 25), (1, 42)):
+                first = round((500 + offset_ms) * RATE / 1000)
+                for frame in range(first, first + round(3 * RATE / 1000)):
+                    stereo[2 * frame + channel] = 12000
+            if sys.byteorder != 'little':
+                stereo.byteswap()
+            audio = directory / 'short-pulses.wav'
+            with wave.open(str(audio), 'wb') as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(RATE)
+                wav.writeframes(stereo.tobytes())
+            annotations = directory / 'events.json'
+            annotations.write_text(json.dumps({
+                'timebase': 'capture-wav-ms',
+                'annotation_method': 'synthetic sample indices',
+                'events': [{'id': 'pulse', 'kind': 'start',
+                            'reference_ms': 500, 'window_ms': 300}],
+            }), encoding='utf-8')
+            result = analyze(audio, annotations, source='synthetic',
+                             capture_method='synthetic', limits=(20, 25, 30))
+            self.assertEqual(result['verdict'], 'INCOMPLETE')
+            self.assertFalse(result['events'][0]['valid'])
+
     def test_strict_limits_fail(self):
         result = analyze(*self.normal, source='synthetic',
                          capture_method='synthetic', limits=(2, 5, 10))

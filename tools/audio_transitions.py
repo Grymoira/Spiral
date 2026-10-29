@@ -43,7 +43,9 @@ def validate_limits(limits: tuple[float, float, float] | None) -> None:
 def find_transition(values: array, *, channel: int, rate: int, reference: int,
                     threshold: int, kind: str) -> int | None:
     """Return sample of verified onset or first sample of sustained silence."""
-    confirm = max(1, round(CONFIRM_MS * rate / 1000))
+    # Starts must be sustained; a short click must not count as the onset of
+    # the continuously audible reference signal. Stops need verified silence.
+    confirm = max(1, round((20 if kind == 'start' else CONFIRM_MS) * rate / 1000))
     pre = max(1, round(20 * rate / 1000))
     above_before = sum(abs(values[2 * i + channel]) >= threshold
                        for i in range(reference - pre, reference))
@@ -62,7 +64,7 @@ def find_transition(values: array, *, channel: int, rate: int, reference: int,
                 continue
             active = sum(abs(values[2 * k + channel]) >= threshold
                          for k in range(i, i + confirm))
-            if active >= confirm // 4:
+            if active >= math.ceil(confirm * 0.60):
                 return i
     else:
         for i in range(reference, length - confirm + 1):
