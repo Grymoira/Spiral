@@ -65,6 +65,15 @@ def find_transition(values: array, *, channel: int, rate: int, reference: int,
             active = sum(abs(values[2 * k + channel]) >= threshold
                          for k in range(i, i + confirm))
             if active >= math.ceil(confirm * 0.60):
+                # This is an annotated start of a continuously audible tone,
+                # not a click detector. A brief burst followed by silence must
+                # not be accepted as a valid onset or improve the percentile.
+                # Return INCOMPLETE instead of searching for another onset.
+                for segment in range(i, length - confirm + 1, confirm):
+                    sustained = sum(abs(values[2 * k + channel]) >= threshold
+                                    for k in range(segment, segment + confirm))
+                    if sustained < math.ceil(confirm * 0.60):
+                        return None
                 return i
     else:
         for i in range(reference, length - confirm + 1):

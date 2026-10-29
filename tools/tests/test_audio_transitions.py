@@ -113,6 +113,37 @@ class TransitionTests(unittest.TestCase):
             self.assertEqual(result['verdict'], 'INCOMPLETE')
             self.assertFalse(result['events'][0]['valid'])
 
+    def test_twelve_ms_bursts_cannot_pass_as_continuous_reference(self):
+        # A 12 ms pulse passes the 60%-of-20ms initial onset test, but the
+        # subsequent silence must invalidate the measurement.
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            frames = RATE * 2
+            stereo = array('h', [0]) * (frames * 2)
+            for channel, offset_ms in ((0, 25), (1, 42)):
+                first = round((500 + offset_ms) * RATE / 1000)
+                for frame in range(first, first + round(12 * RATE / 1000)):
+                    stereo[2 * frame + channel] = 12000
+            if sys.byteorder != 'little':
+                stereo.byteswap()
+            audio = directory / 'twelve-ms-bursts.wav'
+            with wave.open(str(audio), 'wb') as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(RATE)
+                wav.writeframes(stereo.tobytes())
+            annotations = directory / 'events.json'
+            annotations.write_text(json.dumps({
+                'timebase': 'capture-wav-ms',
+                'annotation_method': 'synthetic known sample offsets',
+                'events': [{'id': 'bursts', 'kind': 'start',
+                            'reference_ms': 500, 'window_ms': 300}],
+            }), encoding='utf-8')
+            result = analyze(audio, annotations, source='synthetic',
+                             capture_method='synthetic', limits=(20, 25, 30))
+            self.assertEqual(result['verdict'], 'INCOMPLETE')
+            self.assertFalse(result['events'][0]['valid'])
+
     def test_strict_limits_fail(self):
         result = analyze(*self.normal, source='synthetic',
                          capture_method='synthetic', limits=(2, 5, 10))
