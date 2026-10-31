@@ -13,6 +13,18 @@ qt_add_qml_module(spiral-client
     QML_FILES qml/Main.qml
 )
 
+# Embed Adobe Source Code Pro so clean Windows hosts need no font install.
+# The license remains separate in the shipped LICENSES directory.
+qt_add_resources(spiral-client "spiral-font-resources"
+    PREFIX "/fonts"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/SourceCodePro-Regular.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/SourceCodePro-Medium.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/SourceCodePro-Semibold.ttf"
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/fonts/SourceCodePro-Bold.ttf"
+)
+
 target_compile_features(spiral-client PRIVATE cxx_std_20)
 target_link_libraries(spiral-client PRIVATE
     Qt6::Quick

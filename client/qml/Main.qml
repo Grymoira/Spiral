@@ -15,6 +15,9 @@ ApplicationWindow {
     minimumHeight: 560
     title: "Spiral · synchronized local audio (experimental)"
     color: "#121720"
+    // The complete QFont preserves Unicode fallback families for CJK text.
+    // Descendant Controls inherit this font unless a specific weight is set.
+    font: spiralUiFont
     // The window and custom frames are dark: force Material controls to use
     // a matching palette regardless of the operating-system color scheme.
     Material.theme: Material.Dark

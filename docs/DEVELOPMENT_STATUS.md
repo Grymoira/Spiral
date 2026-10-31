@@ -528,3 +528,12 @@ and full license audits across all deployed codecs are not claimed; leave
 Issue #12 open. Issue #11 is also open until independently captured acoustic
 P50/P95/max, network fault-injection and real OS suspend tests are accepted.
 Always report actual release/PR CI results instead of assuming success.
+
+### Issue #74 UI typography (experimental Draft PR)
+
+Adobe Source Code Pro 2.42.0 Regular/Medium/Semibold/Bold is now embedded in
+the Qt resource bundle on the staged #74 branch, with OFL-1.1 license packaged
+for Windows portable builds. The family is applied to the application and
+ApplicationWindow, with named CJK fallback families. Linux Qt compilation and
+Windows real-rendered glyph/DPI/contrast checks remain required before this
+staged change can be merged. This does not alter synchronized playback.
