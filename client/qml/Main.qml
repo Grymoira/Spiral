@@ -328,9 +328,13 @@ ApplicationWindow {
                 && roomState.playback.trackId === selectedHash
     }
     function mediaLoaded() {
+        // Qt 6.8: BufferingMedia still has data for imminent playback.
+        // StalledMedia (actual interruption), LoadingMedia and fatal errors
+        // must continue to fail closed; do not pause a healthy buffer fill.
         return !mediaFaulted &&
                 (player.mediaStatus === MediaPlayer.LoadedMedia ||
-                 player.mediaStatus === MediaPlayer.BufferedMedia)
+                 player.mediaStatus === MediaPlayer.BufferedMedia ||
+                 player.mediaStatus === MediaPlayer.BufferingMedia)
     }
     // Qt may report StalledMedia/LoadingMedia while playbackState is still
     // PlayingState. Readiness withdrawal alone is insufficient: stop the

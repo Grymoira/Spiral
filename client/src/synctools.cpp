@@ -21,6 +21,7 @@ const QSet<QString> &approvedEvents() {
         QStringLiteral("client.started"), QStringLiteral("client.stopped"),
         QStringLiteral("client.file_selected"), QStringLiteral("client.file_rejected"),
         QStringLiteral("client.media_error"),
+        QStringLiteral("client.media_unavailable"),
         QStringLiteral("client.ready_withdraw_wake"),
         QStringLiteral("client.ready_withdraw_clock"),
         QStringLiteral("client.ready_withdraw_media"),
