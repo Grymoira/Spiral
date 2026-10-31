@@ -60,6 +60,9 @@ ApplicationWindow {
     property int lastCorrectionMs: -100000
     property bool userJoining: false
     property var pendingControl: null
+    // One bounded progress marker per local play request; not acoustic proof.
+    property real diagnosticPositionOrigin: -1
+    property bool diagnosticPositionReported: false
 
     function endpoint(path) { return serverUrl.replace(/\/+$/, "") + path }
     function send(message) {
@@ -217,6 +220,7 @@ ApplicationWindow {
         if (p.playState === "playing" ||
                 (p.pending && p.pending.playState === "playing")) {
             if (authenticated && p.trackId) {
+                syncTools.logEvent("client.ready_withdraw_wake")
                 send({type:"ready", trackId:p.trackId,
                       trackGeneration:p.trackGeneration, ready:false})
             }
@@ -242,6 +246,7 @@ ApplicationWindow {
         // Send Ready(false) even if the old readySentKey has been cleared.
         // The server may still hold Ready after an unseen COMMIT.
         if (authenticated && roomState.playback && roomState.playback.trackId) {
+            syncTools.logEvent("client.ready_withdraw_clock")
             send({type:"ready", trackId:roomState.playback.trackId,
                   trackGeneration:roomState.playback.trackGeneration, ready:false})
         }
@@ -331,6 +336,14 @@ ApplicationWindow {
     // PlayingState. Readiness withdrawal alone is insufficient: stop the
     // audio pipeline immediately and fence any old scheduled callback.
     function handleMediaStatusChanged() {
+        if (player.mediaStatus === MediaPlayer.BufferingMedia)
+            syncTools.logEvent("client.media_state_buffering")
+        else if (player.mediaStatus === MediaPlayer.StalledMedia)
+            syncTools.logEvent("client.media_state_stalled")
+        else if (mediaLoaded())
+            syncTools.logEvent("client.media_state_loaded")
+        else
+            syncTools.logEvent("client.media_state_other")
         if (!mediaLoaded()) {
             player.pause()
             playbackTimer.stop()
@@ -342,6 +355,7 @@ ApplicationWindow {
                 // The server may still have Ready=true even after a previous
                 // local key was cleared. A fresh authoritative snapshot after
                 // this Ready(false) must precede any resumed playback.
+                syncTools.logEvent("client.ready_withdraw_media")
                 send({type:"ready", trackId:roomState.playback.trackId,
                       trackGeneration:roomState.playback.trackGeneration, ready:false})
                 readySentKey = ""
@@ -376,6 +390,7 @@ ApplicationWindow {
     }
     function revokeReady() {
         if (!authenticated || !readySentKey || !roomState.playback) return
+        syncTools.logEvent("client.ready_withdraw_explicit")
         send({type:"ready", trackId:roomState.playback.trackId,
               trackGeneration:roomState.playback.trackGeneration, ready:false})
         readySentKey = ""
@@ -516,6 +531,7 @@ ApplicationWindow {
         // Ready(false) must be sent even if the local cached key was already
         // cleared: the server may still believe that this member is Ready.
         if (p.trackId) {
+            syncTools.logEvent("client.ready_withdraw_authority")
             send({type:"ready", trackId:p.trackId,
                   trackGeneration:p.trackGeneration, ready:false})
         }
@@ -601,6 +617,9 @@ ApplicationWindow {
         if (p.pending.playState === "playing") {
             player.position = Math.min(Number(p.durationMs), Number(p.pending.mediaMs) +
                     Math.max(0, lateness))
+            diagnosticPositionOrigin = player.position
+            diagnosticPositionReported = false
+            syncTools.logEvent("client.play_request_timer")
             player.play()
         } else {
             // Delayed pause is safer than free-running audio when the media
@@ -663,6 +682,9 @@ ApplicationWindow {
             }
             if (player.playbackState !== MediaPlayer.PlayingState) {
                 player.position = position
+                diagnosticPositionOrigin = player.position
+                diagnosticPositionReported = false
+                syncTools.logEvent("client.play_request_snapshot")
                 player.play()
                 lastCorrectionMs = syncTools.monotonicMs()
             } else if (Math.abs(player.position - position) > 300 &&
@@ -681,6 +703,18 @@ ApplicationWindow {
     MediaPlayer {
         id: player
         audioOutput: AudioOutput { volume: 0.65 }
+        onPlaybackStateChanged: {
+            syncTools.logEvent(playbackState === MediaPlayer.PlayingState
+                               ? "client.player_state_playing" : "client.player_state_not_playing")
+        }
+        onPositionChanged: {
+            if (!window.diagnosticPositionReported && window.diagnosticPositionOrigin >= 0 &&
+                    playbackState === MediaPlayer.PlayingState &&
+                    position >= window.diagnosticPositionOrigin + 150) {
+                window.diagnosticPositionReported = true
+                syncTools.logEvent("client.player_position_advanced")
+            }
+        }
         onErrorOccurred: function(error, errorString) {
             // Some backends emit an error without leaving BufferedMedia.
             // A faulted pipeline must stop even if mediaStatus looks usable.
@@ -811,6 +845,7 @@ ApplicationWindow {
         window.safeguardAuthority()
         window.requestWakeSnapshot()
         if (window.clockReady && window.lastClockSampleMs >= 0 && syncTools.monotonicMs() - window.lastClockSampleMs > 60000) {
+            syncTools.logEvent("client.ready_withdraw_clock_expired")
             window.revokeReady()
             window.clockReady = false
             window.clockSamples = 0
