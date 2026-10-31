@@ -60,3 +60,35 @@ An authenticated manual guest removal emits the fixed REST route label
 `rooms.member_remove` (not a dynamic room/member identifier). A successful
 desktop host action emits `client.member_removed`. Both use the existing
 redacted event schema and never expose credentials or member IDs.
+
+## Issue #11 phase 11 — bounded Qt playback diagnostics (Draft)
+
+The experimental desktop build adds fixed, allowlisted client event codes to
+separate the software control sequence from actual Qt player state. This does
+**not** prove audio reached an output device or that two physical sound waves
+were synchronized. The existing JSONL schema and 2 MiB rotation still apply.
+
+- `client.play_request_timer` / `client.play_request_snapshot`: the timer or
+  authoritative snapshot path is about to call `QMediaPlayer.play()`.
+- `client.player_state_playing` / `client.player_state_not_playing`:
+  `playbackStateChanged` signaled a Qt playback-state transition.
+- `client.player_position_advanced`: the player-reported position advanced by
+  at least 150 ms from a request's starting position; logged at most once per
+  play request. Neither this nor `PlayingState` establishes acoustic output.
+- `client.media_state_buffering`, `client.media_state_stalled`,
+  `client.media_state_loaded`, `client.media_state_other`: media status
+  classification when the existing status handler executes.
+- `client.ready_withdraw_media`, `client.ready_withdraw_clock`,
+  `client.ready_withdraw_clock_expired`, `client.ready_withdraw_authority`,
+  `client.ready_withdraw_wake`, `client.ready_withdraw_explicit`: a fixed
+  reason logged before each corresponding outgoing `ready:false` operation.
+  The server can also clear readiness on socket loss; this is not an outgoing
+  ready command from the client.
+
+All codes are constant strings with no room ID, invitation, token, URL, file
+path, media hash, free-form message or device name. To correlate instances,
+filter by the existing ephemeral `session_id` and UTC timestamp. For Issue #11,
+compare a successful `playback.committed` timestamp against `play_request_*`,
+`player_state_*`, `player_position_advanced` and `ready_withdraw_*` events.
+The diagnostic build is an investigation aid only; do not close #11 until
+actual audible playback and controlled physical measurements pass.

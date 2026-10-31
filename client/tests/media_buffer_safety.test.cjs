@@ -52,7 +52,8 @@ function setup() {
                     executeServerMs:2300,mediaMs:0}},
             members:[{id:"guest",ready:true}]},
         player,playbackTimer,
-        MediaPlayer:{LoadedMedia:1,BufferedMedia:2,PlayingState:2},
+        MediaPlayer:{LoadedMedia:1,BufferedMedia:2,StalledMedia:3,
+            BufferingMedia:4,PlayingState:2},
         socket:{status:1,sendTextMessage(x){signal.sent.push(JSON.parse(x));}},
         WebSocket:{Open:1},logText:"",
         syncTools:{monotonicMs:()=>signal.now,clockContinuityOk:()=>true,
@@ -64,6 +65,58 @@ function setup() {
     return {ctx,signal,player,playbackTimer,hash};
 }
 function sent(signal,type){return signal.sent.filter(v=>v.type===type);}
+
+// Qt BufferingMedia is NOT a stall. Qt 6.8 explicitly allows continued
+// playback with buffered data; the previous predicate treated it as fatal
+// and immediately canceled every synchronized Play on Windows.
+{
+    const {ctx,signal,player,playbackTimer}=setup();
+    player.mediaStatus=4;
+    assert.equal(ctx.mediaLoaded(),true);
+    ctx.handleMediaStatusChanged();
+    assert.equal(player.playbackState,2,"healthy buffering paused active playback");
+    assert.equal(signal.pauses,0,"healthy buffering called player.pause()");
+    assert.equal(playbackTimer.running,true,"healthy buffering canceled pending timer");
+    assert.equal(ctx.scheduledKey,"1:7");
+    assert.equal(sent(signal,"ready").length,0,"healthy buffering revoked Ready");
+    assert.equal(sent(signal,"snapshot").length,0,"healthy buffering triggered recovery");
+    assert.equal(ctx.wakeSnapshotId,"");
+
+    // A later *real* stall still fails closed, fences the timer,
+    // withdraws Ready and requests authoritative recovery.
+    player.mediaStatus=3;
+    ctx.handleMediaStatusChanged();
+    assert.equal(player.playbackState,0);
+    assert.equal(playbackTimer.running,false);
+    assert.equal(sent(signal,"ready").length,1);
+    assert.equal(sent(signal,"ready")[0].ready,false);
+    assert.equal(sent(signal,"snapshot").length,1);
+    assert.ok(ctx.wakeSnapshotId);
+}
+
+// No-room Local play must likewise survive the normal first buffer fill.
+{
+    const {ctx,signal,player}=setup();
+    ctx.authenticated=false;
+    ctx.roomState={};
+    player.mediaStatus=4;
+    ctx.handleMediaStatusChanged();
+    assert.equal(player.playbackState,2,"first Local play interrupted by buffering");
+    assert.equal(signal.pauses,0);
+    assert.equal(sent(signal,"ready").length,0);
+}
+
+// Fatal backend errors must NOT become playable merely because Qt still
+// reports BufferingMedia after raising the error.
+{
+    const {ctx,signal,player}=setup();
+    player.mediaStatus=4;
+    ctx.mediaFaulted=true;
+    ctx.handleMediaStatusChanged();
+    assert.equal(ctx.mediaLoaded(),false);
+    assert.equal(player.playbackState,0);
+    assert.equal(sent(signal,"ready")[0].ready,false);
+}
 
 // 1) StalledMedia can coexist with PlayingState. The local audio must be
 // forced paused before a server round-trip and all old appointments removed.
